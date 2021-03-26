@@ -5,7 +5,8 @@
 ###### de novo assembled genome sequence                                             ######
 ###########################################################################################
 
-breakage.prob.scoring <- function(randSeq, output){
+breakage.prob.scoring <- function(randSeq, output, len, seed){
+  set.seed(seed)
   if(length(output)==0){
     # if DBG assembly took too long, it will stop at X-minutes, where X is
     # the upper time limit for exploration; in such a case, it will generate
@@ -18,6 +19,7 @@ breakage.prob.scoring <- function(randSeq, output){
     prob.ref.copy <- randSeq
     # initialise vector to store the sums of breakpoint probability occurrences
     prob.ref.sums <- vector(mode = "numeric", length = length(output))
+    prob.ref.seq  <- vector(mode = "numeric", length = length(output))
     pb <- txtProgressBar(min = 1, max = length(output), style = 3)
     sums.index = 1
     
@@ -60,15 +62,34 @@ breakage.prob.scoring <- function(randSeq, output){
         }
         if(i==length(reads)){
           prob.ref.sums[sums.index] <- sum(prob.ref$prob*prob.ref$freq)
+          prob.ref.seq[sums.index]  <- nchar(output[[path]])
           sums.index = sums.index+1 
         }
       }
       setTxtProgressBar(pb, path)
     }
     close(pb)
+    
+    # omit any zero probability outcomes as will falsely skew the final result
+    # ind <- which(prob.ref.sums==0)
+    # if(length(ind)>0){
+    #   prob.ref.sums <- prob.ref.sums[-ind]
+    #   prob.ref.seq  <- prob.ref.seq[-ind]
+    #   output        <- output[-ind]
+    # }
+    # 
+    # only accept the top 50% of the de novo assembled solutions
+    ind           <- which(prob.ref.seq>=len*0.5)
+    prob.ref.sums <- prob.ref.sums[ind]
+    prob.ref.seq  <- prob.ref.seq[ind]
+    output        <- output[ind]
+    
+    # normalising the score to ignore the effect of seq length on total score
+    prob.ref.sums <- prob.ref.sums/prob.ref.seq
+    
     print("All k-mer breakpoints counted!", quote = F)
     
     sorted.sums <- match(sort(prob.ref.sums, decreasing = TRUE), prob.ref.sums)
-    return(list(output[sorted.sums[1]][[1]], prob.ref.sums))
+    return(list(output[sorted.sums[1]][[1]], prob.ref.sums, prob.ref.seq, output))
   }
 }

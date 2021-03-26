@@ -51,14 +51,14 @@ is the following:
 2. Assign uniform or non-uniform breakage probabilities to a k-mer length across the whole genome
 3. Generate reads biased based on these probabilities                         
 4. De novo assemble genome based on generated reads                           
-5. Obtain alignment scores for each de novo generated assembly against reference sequence                                                         
+5. Obtain pairwise alignment scores for each de novo generated assembly against reference sequence                                                         
 6. Obtain alignment scores for each de novo generated assembly ONLY taking into account the breakage probabilities and alignment against reads
 
 ## Metrics Analysis
 This function runs the assembler function and then runs calculations on the
 alignment scoring metrics. It calculates the following:
 
-1. Correlation coefficients of each alignment scoring metric versus the breakage probability alignment scores
-2. The percent of correctness of breakpoints versus each alignment metric, where we defined the "correctness" as a breakpoint score that is equal to or greater than the alignment score
+1. Correlation coefficients of each pairwise alignment scoring metric versus the breakage probability alignment scores
+2. The percent of correctness of breakpoints versus each alignment metric, where we defined the "correctness" as a breakpoint score that is equal to or greater than the pairwise alignment score
 3. The breakpoint alignment scoring performance by measuring the average levenshtein distance for various read lengths
-4. Multi-regression analysis of local versus global versus the other alignment scoring metrics
+4. Multi-regression analysis of local versus global versus the other pairwise alignment scoring metrics

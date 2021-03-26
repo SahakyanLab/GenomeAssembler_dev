@@ -18,7 +18,9 @@ string.reconstruction <- function(len = len, G.cont = G.cont,
                                   timer = timer, # max.time per DBG assembly
                                   length.of.read = length.of.read, # length of each read
                                   multiplier = multiplier, # read generation number multiplier
-                                  prob.type = prob.type # "uniform" or "non-uniform"
+                                  prob.type = prob.type, # "uniform" or "non-uniform"
+                                  # ind = i,
+                                  seed = seed
                                   ){
   # measure execution time 
   start.time <- Sys.time()
@@ -28,17 +30,19 @@ string.reconstruction <- function(len = len, G.cont = G.cont,
                             A.cont = A.cont, k.mer = 2, NCPU = NCPU,
                             length.of.read = length.of.read,
                             multiplier = multiplier, 
-                            prob.type = prob.type)
-  
+                            prob.type = prob.type,
+                            # ind = i, 
+                            k = k, seed = seed)
+
   # traverse all paths in the rooted tree and construct the Eulerian paths
   output <- eulerian.path(get.balance.count(
-    debrujin.graph.from.kmers(kmer.composition(k = k))), timer = timer)
+    debrujin.graph.from.kmers(randSeq[[7]])), timer = 1)
   
   # obtain most plausible sequence based on breakage probability scores
-  breakage.output <- breakage.prob.scoring(randSeq[[2]], output)
+  breakage.output <- breakage.prob.scoring(randSeq[[2]], output, len = len, seed = 1234)
   # calculate the alignment scores per reconstructed genome vs. reference sequence
-  align <- alignment.scoring(path = output, randSeq[[1]], NCPU = NCPU)
-  
+  align <- alignment.scoring(path = breakage.output[[4]], randSeq[[1]], NCPU = NCPU, seed = 1234)
+
   # measure execution time
   end.time   <- Sys.time()
   time.taken <- end.time-start.time
@@ -50,6 +54,7 @@ string.reconstruction <- function(len = len, G.cont = G.cont,
   RESULTS$alignment.res     <- align[[3]] # all calculated alignment scores in a df
   RESULTS$breakage.best.seq <- breakage.output[[1]] # highest breakage prob score sequence
   RESULTS$prob.ref.table    <- breakage.output[[2]] # all breakage probability scores
+  RESULTS$prob.ref.seq      <- breakage.output[[3]] # all assembled sequence lengths
   RESULTS$prob.table        <- randSeq[[2]] # table of probs to bias reads generation
   RESULTS$kmer.prob.seq     <- randSeq[[6]] # all k-mers from genome and associated probs
   RESULTS$total.reads       <- randSeq[[3]] # total number of reads generated

@@ -2,6 +2,9 @@
 # no file with certain endings
 *~
 *.DS_Store
+*.RHistory
+*.RDataTmp*
+*.RData
 # ignore these directories with all the files within
 temp/
 

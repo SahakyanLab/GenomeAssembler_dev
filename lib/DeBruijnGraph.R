@@ -6,25 +6,6 @@
 ###### 2. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4719071/						           ######
 ###########################################################################################
 
-kmer.composition <- function(k){
-  # import all generatd reads 
-  reads <- scan("../data/reads.txt", what = character(), sep = "", quiet = TRUE)
-  # obtain all k-mers per read
-  kmers <- lapply(1:length(reads), function(i){
-    sequence <- unlist(strsplit(reads[i], split = ""))
-    end      <- length(sequence)-k+1
-    kmer     <- substring(paste(sequence, collapse = ""),
-                          first = 1:end, last = (1:end)+k-1)
-  })
-  kmers   <- unlist(kmers)
-  # obtain weighted k-mers 
-  kmer.df <- as.data.frame(table(kmers))
-  kmers   <- unlist(lapply(kmer.df$kmers, as.character))
-  newList <- list(kmers, k)
-  print("Weighted k-mers obtained!", quote = FALSE)
-  return(newList)
-}
-
 debrujin.graph.from.kmers <- function(newList){
   # re-define objects from previous functions' output
   patterns <- newList[[1]]

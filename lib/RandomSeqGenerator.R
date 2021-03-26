@@ -3,7 +3,9 @@
 ###### A, T, G and C. 																                               ######
 ###########################################################################################
 
-RandomSeqGenerator <- function(len = len, G.cont = G.cont, C.cont = C.cont, A.cont = A.cont){
+RandomSeqGenerator <- function(len = len, G.cont = G.cont, C.cont = C.cont, A.cont = A.cont,
+                               seed = seed){
+  set.seed(seed)
   # multiply base content by len of sequence
   G.cont <- round(G.cont*len)
   C.cont <- round(C.cont*len)
