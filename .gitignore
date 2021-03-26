@@ -3,6 +3,7 @@
 *~
 *.DS_Store
 *.Rhistory
+*.RDataTmp
 *.RDataTmp1
 *.RDataTmp2
 *.RDataTmp3
