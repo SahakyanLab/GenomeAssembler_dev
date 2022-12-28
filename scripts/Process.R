@@ -21,4 +21,7 @@ assembler = DBG$new(
 )
 assembler$run_assembler()
 
-assembler$dbg_summary
+assembler
+
+# self=assembler
+# private=NULL
