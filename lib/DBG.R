@@ -6,8 +6,13 @@ DBG <- R6::R6Class(
         #'  from sequencing reads.
         read_kmers = NULL,
 
+        #' @field dbg_kmer Numeric vector of the k-mer sizes for use in the 
+        #' de bruijn graph assembly process.
+        dbg_kmer = 9,
+
         initialize = function(seq_len, read_len, G_cont, C_cont, 
-                              A_cont, kmer, seed, action){
+                              A_cont, kmer, dbg_kmer, seed, action){
+            if(!missing(dbg_kmer)) self$dbg_kmer <- dbg_kmer
             super$initialize(
                 seq_len = seq_len,
                 read_len = read_len,
@@ -49,12 +54,12 @@ DBG <- R6::R6Class(
             # obtain all k-mers per read
             read.kmers <- lapply(1:length(reads), function(i){
                 sequence <- unlist(strsplit(reads[i], split = ""))
-                end <- length(sequence)-self$kmer+1
-                kmer <- substring(
+                end <- length(sequence)-self$dbg_kmer+1
+                dbg.kmer <- substring(
                     text = paste(sequence, collapse = ""),
                     first = 1:end, 
-                    last = (1:end)+self$kmer-1)
-                return(kmer)
+                    last = (1:end)+self$dbg_kmer-1)
+                return(dbg.kmer)
             })
             read.kmers <- unlist(read.kmers)
 

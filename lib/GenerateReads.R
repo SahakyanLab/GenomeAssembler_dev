@@ -13,6 +13,9 @@ GenerateReads <- R6::R6Class(
         #'  Kmer can only take values of c(4,6,8).
         kmer = 4,
 
+        #' @field dbg_summary List of the summary statistics of the assembly process.
+        dbg_summary = NULL,
+
         initialize = function(seq_len, read_len, G_cont, C_cont, 
                               A_cont, kmer, seed, action){
             if(!missing(seq_len)) private$seq_len <- seq_len
@@ -170,16 +173,17 @@ GenerateReads <- R6::R6Class(
             dummy.bases <- c(dummy.base.start, dummy.base.end)
 
             # assign avg prob to dummy k-mers
-
             prob <- c(
                 self$df_prob[, -c("kmer")],
                 rep(colMeans(
                     self$df_prob[, -c("kmer")], 
                     na.rm = TRUE
-                )/length(dummy.bases), 
+                ),
+                # )/length(dummy.bases))
                 length(dummy.bases))
             )
             prob <- unlist(prob, use.names = FALSE)
+            prob.norm <- prob/sum(prob, na.rm = TRUE)
 
             dummy.bases.df <- data.table(
                 kmer = dummy.bases,
@@ -189,7 +193,10 @@ GenerateReads <- R6::R6Class(
                 )
             )
             setnames(dummy.bases.df, private$cols_to_keep)
-            self$df_prob <- rbind(self$df_prob, dummy.bases.df) 
+            self$df_prob <- rbind(self$df_prob, dummy.bases.df)
+            self$df_prob[, prob.norm := prob.norm]
+            to.keep <- c("kmer", "prob.norm")
+            self$df_prob <- self$df_prob[, ..to.keep]
             setnames(self$df_prob, c("kmer", "prob"))
 
             # obtain all k-mers of the randomly generated string
@@ -268,12 +275,15 @@ GenerateReads <- R6::R6Class(
             match.read <- which(read.length >= (lower.limit) & read.length <= (upper.limit))
             reads.strings <- read[match.read]
             reads.freq <- read.length[match.read]
-            coverage <- (length(reads.strings)*private$read_len)/length(self$genome_seq)
+            self$dbg_summary$coverage <- signif(
+                (length(reads.strings)*private$read_len)/length(self$genome_seq),
+                digits = 3
+            )
 
-            # remove dummy bases on each end of the randomly generated sequence
-            self$genome_seq <- self$genome_seq[
-                self$kmer:(length(self$genome_seq)-self$kmer+1)]
-            self$df_prob <- head(self$df_prob, n = -(2*self$kmer-2))
+            # # remove dummy bases on each end of the randomly generated sequence
+            # self$genome_seq <- self$genome_seq[
+            #     self$kmer:(length(self$genome_seq)-self$kmer+1)]
+            # self$df_prob <- head(self$df_prob, n = -(2*self$kmer-2))
 
             # save generated reads into text file for use in genome assembly
             dir.create(

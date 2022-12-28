@@ -1,3 +1,4 @@
+# load dependencies
 suppressPackageStartupMessages(suppressWarnings(library(dplyr)))
 suppressPackageStartupMessages(suppressWarnings(library(stringr)))
 suppressPackageStartupMessages(suppressWarnings(library(data.table)))
@@ -14,9 +15,10 @@ assembler = DBG$new(
     C_cont = 0.25,
     A_cont = 0.1,
     kmer = 4,
+    dbg_kmer = 9,
     seed = 1234,
     action = "ratio"
 )
 assembler$run_assembler()
 
-assembler
+assembler$dbg_summary
