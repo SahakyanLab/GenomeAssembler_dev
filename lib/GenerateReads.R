@@ -63,7 +63,7 @@ GenerateReads <- R6::R6Class(
         action = "ratio",
 
         #' @field cols_to_keep Character vector. Columns to keep from df_prob.
-        cols_to_keep = character(),
+        cols_to_keep = NULL,
 
         #' @description
         #' Get probability values for ultrasonication experiments.
@@ -157,9 +157,9 @@ GenerateReads <- R6::R6Class(
             #     return(avg.prob)
             # })
             self$genome_seq <- c(
-                rep("N", (self$kmer-1)), 
+                rep("N", (self$kmer/2-1)), 
                 self$genome_seq, 
-                rep("N", (self$kmer-1))
+                rep("N", (self$kmer/2-1))
             )
 
             # add dummy k-mers from each end of randSeq onto k-mer vector
@@ -178,9 +178,13 @@ GenerateReads <- R6::R6Class(
                 rep(colMeans(
                     self$df_prob[, -c("kmer")], 
                     na.rm = TRUE
-                ),
-                # )/length(dummy.bases))
-                length(dummy.bases))
+                ),length(dummy.bases))
+                
+                # rep(colMeans(
+                #     self$df_prob[, -c("kmer")], 
+                #     na.rm = TRUE
+                # ), length(dummy.bases)
+                # )/length(dummy.bases)
             )
             prob <- unlist(prob, use.names = FALSE)
             prob.norm <- prob/sum(prob, na.rm = TRUE)
@@ -200,7 +204,7 @@ GenerateReads <- R6::R6Class(
             setnames(self$df_prob, c("kmer", "prob"))
 
             # obtain all k-mers of the randomly generated string
-            end  <- length(self$genome_seq)-self$kmer+1
+            end <- length(self$genome_seq)-self$kmer+1
             genome_seq_kmers <- substring(
                 paste(self$genome_seq, collapse = ""),
                 first = 1:end, 
@@ -249,34 +253,61 @@ GenerateReads <- R6::R6Class(
             }, simplify = TRUE)
 
             # generate all reads
-            three.sd    <- (private$read_len*0.1)*3 # 1.SD = 10% of read length
+            three.sd    <- private$read_len*0.1*3 # 1.SD = 10% of read length
             upper.limit <- private$read_len+three.sd
             lower.limit <- private$read_len-three.sd
             max.runs    <- len.sampling
-            end         <- length(self$genome_seq)-1
+            # max.end     <- length(self$genome_seq)-1
 
             sampling.points <- sample(
-                x = breakpoint.positions, 
+                x = breakpoint.positions,
                 size = max.runs, 
                 replace = FALSE
             )
+
             start <- seq(from = 1, to = max.runs, by = 2)
             end <- seq(from = 2, to = max.runs, by = 2)
-            mat <- matrix(c(sampling.points[start], sampling.points[end]), nrow = 2)
+            mat <- matrix(
+                data = c(sampling.points[start], sampling.points[end]), 
+                nrow = 2
+            )
             mat <- apply(mat, 2, sort)
-            mat.ir <- IRanges(start = mat[1,]+1, end = mat[2,])
-            bio.ref.seq <- Biostrings::DNAStringSet(paste(self$genome_seq, collapse = ""))
-            read <- substring(
+            mat.ir <- IRanges(
+                start = mat[1,], 
+                end = mat[2,]+self$kmer-1
+            )
+            mat.ir <- mat.ir[which(
+                (width(mat.ir) != 0) &
+                (width(mat.ir) >= (lower.limit)) & 
+                (width(mat.ir) <= (upper.limit))
+            ), ]
+            bio.ref.seq <- Biostrings::DNAStringSet(
+                paste(self$genome_seq, collapse = "")
+            )
+
+            # test=mat.ir[which(end(mat.ir) == max(end(mat.ir))),]
+            # kmer.from.seq
+            # kmer.from.seq[c(start(test[1,]), end(test[1,])-self$kmer/2-1)]
+            # test.this=IRanges(
+            #     start = start(test[1,]), 
+            #     end = end(test[2,])-self$kmer/2-1
+            # )
+            # kmer.from.seq
+            # test.this
+            # substring(
+            #     text = bio.ref.seq,
+            #     first = start(test[1,]),
+            #     last = end(test[1,])
+            # )
+            
+            reads <- substring(
                 text = bio.ref.seq,
                 first = start(mat.ir),
                 last = end(mat.ir)
             )
-            read.length <- nchar(read)
-            match.read <- which(read.length >= (lower.limit) & read.length <= (upper.limit))
-            reads.strings <- read[match.read]
-            reads.freq <- read.length[match.read]
+            read.length <- nchar(reads)
             self$dbg_summary$coverage <- signif(
-                (length(reads.strings)*private$read_len)/length(self$genome_seq),
+                (length(reads)*private$read_len)/length(self$genome_seq),
                 digits = 3
             )
 
@@ -293,14 +324,14 @@ GenerateReads <- R6::R6Class(
             )
             file.reads <- file("../data/reads/reads.txt")
             writeLines(
-                unlist(reads.strings), 
+                unlist(reads), 
                 file.reads, 
                 sep = "\n"
             )
             close(file.reads)
 
             # fasta file
-            all.reads <- unlist(reads.strings)
+            all.reads <- unlist(reads)
             all.reads <- Biostrings::DNAStringSet(all.reads)
             names(all.reads) <- paste0("seq-", 1:length(all.reads))
             Biostrings::writeXStringSet(
