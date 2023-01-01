@@ -13,6 +13,10 @@ DBG <- R6::R6Class(
         #'  de bruijn graph assembly process.
         dbg_kmer = 9,
 
+        #' @field dbg_kmer_table Data.table of k-mer counts generated from 
+        #'  sequencing read and their weightings based on the frequency.
+        dbg_kmer_table = NULL,
+
         #' @field pathways Character vector of all de novo assembled genomes.
         pathways = NULL,
 
@@ -92,18 +96,19 @@ DBG <- R6::R6Class(
 
             # obtain all k-mers per read
             read.kmers <- lapply(1:length(self$sequencing_reads), function(i){
-                sequence <- unlist(strsplit(self$sequencing_reads[i], split = ""))
-                end <- length(sequence)-self$dbg_kmer+1
-                dbg.kmer <- substring(
-                    text = paste(sequence, collapse = ""),
+                end <- nchar(self$sequencing_reads[i])-self$dbg_kmer+1
+                return(substring(
+                    self$sequencing_reads[i],
                     first = 1:end, 
-                    last = (1:end)+self$dbg_kmer-1)
-                return(dbg.kmer)
+                    last = (1:end)+self$dbg_kmer-1
+                ))
             })
-            read.kmers <- unlist(read.kmers)
+            read.kmers <- unlist(read.kmers, use.names = FALSE)
 
             # obtain k-mers
             kmer.df <- as.data.table(table(read.kmers))
+            kmer.df[, N.weights := N/sum(N, na.rm = TRUE)]
+            self$dbg_kmer_table <- kmer.df
             self$read_kmers <- unlist(
                 lapply(kmer.df$read.kmers, as.character),
                 use.names = FALSE
@@ -234,170 +239,180 @@ DBG <- R6::R6Class(
             t1 <- Sys.time()
             cur.msg <- "Traversing along the de bruijn graph"
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
-            cat(paste0(cur.msg, l))
-            # cat(cur.msg, l, "\n", sep = "")
+            # cat(paste0(cur.msg, l))
+            cat(cur.msg, l, "\n", sep = "")
 
-            # create a copy of the dictionary for use in the pathway explorations
-            dict <- copy(private$dict)
-            timer <- 100
+            # test_dict = list(
+            #     "NGTG" = "GTGT",
+            #     "GTGT" = "TGTA",
+            #     "TGTA" = c("GTAC", "GTAT"),
+            #     "GTAC" = "TACC",
+            #     "GTAT" = "TATC",
+            #     "TACC" = "ACCT",
+            #     "TATC" = c("ATCG", "ATCC"),
+            #     "ATCC" = "TCCG"
+            # )
+
+            # ############################
+            # initialise list to store number of branching points per step
+            # dict=copy(test_dict)
+            # queue_dict <- list()
+            # queue_path <- list()
+            # queue_i <- list()
+            # already_traversed <- test_dict[lengths(test_dict) > 1]
+            # ############################
+
+            #' @description
+            #' Reconstruct genome from assembly
+            #' @return Character vector of reconstructed genome.
+            reconstruct_genome = function(path){
+                # initialise vector to save genome path
+                genome <- character()
+                # reconstruct genome path for a given string
+                len <- nchar(path[1])
+                genome <- c(
+                    substring(text = path[1], first = 1:len, last = 1:len),
+                    substring(text = path[2:length(path)], first = len, last = len)
+                )
+                genome <- paste(genome, collapse = "")
+                return(genome)
+            }
 
             # obtain all possible starting points of the genome
             start.point <- names(private$balanced_count)[which(
                 private$balanced_count == -1
             )]
 
-            # initialise list of reconstructed genome paths with the highest score
-            pathways <- list()
-            # initialise text progress bar
-            # pb <- txtProgressBar(min = 1, max = length(start.point)+1, style = 3)
-            start.point.index = 1
-            
-            while(start.point.index<=length(start.point)){
-                # initialise list to store number of branching points per step
-                branch.point <- list()
+            # traverse all paths
+            all.paths <- pbapply::pblapply(1:length(start.point), function(x){
+                # create a copy of the dictionary for use in the pathway explorations
+                dict <- copy(private$dict)
+                queue_dict <- list()
+                queue_path <- list()
+                queue_i <- list()
+                already_traversed <- private$dict[lengths(private$dict) > 1]
+
+                if(length(already_traversed) > 0){
+                    already_traversed_index <- lapply(1:length(already_traversed), function(ind){
+                        temp <- as.data.table(already_traversed[[ind]])
+                        temp[, key := names(already_traversed[ind])]
+                        setnames(temp, c("value", "key"))
+                        return(temp)
+                    })
+                    already_traversed_index <- rbindlist(already_traversed_index)
+                    already_traversed_index[, index := 0]
+                    setcolorder(already_traversed_index, c("key", "value", "index"))
+                }
+                
                 # initialise list to save the reconstructed genome path
                 all.paths <- list()
                 # initialise current path with starting point
-                path <- start.point[start.point.index]
-                main.index = 1
-                continue = TRUE
-                while(continue){
-                    if(main.index==1){
-                        #####################
-                        ### iteration one ###
-                        #####################
-                        i = 1
-                        while(TRUE){
-                            last.item <- tail(path, n = 1)
-                            all.items <- dict[last.item][[1]]
-                            # store the number of branching points per step
-                            if(length(all.items)>0){
-                                branch.point[[i]] <- seq(1,length(all.items),1) 
-                            }
-                            # always traverse the tree along the left-most path
-                            new.item  <- all.items[1]
-                            if(length(new.item)>0){
-                                path <- c(path, new.item)
-                                if(length(dict[last.item][[1]])>1){
-                                    dict[last.item][[1]] <- dict[last.item][[1]][-which(new.item==dict[last.item][[1]])]
-                                } else {
-                                    dict[last.item] <- NULL
-                                }
+                path <- start.point[x]
+                i <- 1
+
+                # all.paths=unlist(all.paths)
+                # test=gregexpr(pattern = all.paths[25], text = all.paths)
+                # test.loop=sapply(1:length(test), function(x){
+                #     identical(test[[x]], all.paths[25])
+                # })
+                # which(test.loop)
+
+                # duplicated(all.paths)
+                # all.paths[25]
+
+                # sort(all.paths)
+
+                while(TRUE){
+                    last.item <- tail(path, n = 1)
+                    all.items <- dict[last.item][[1]]
+                    cur.item <- all.items[1]
+                    # cur.msg <- paste0(
+                    #     "Last item:  ", last.item, 
+                    #     " -> ", cur.item, ". ", i
+                    #     # " -> ", all.items[1], ",", all.items[2], ". ", i
+                    # )
+
+                    if(length(all.items) > 0){
+                        path <- c(path, cur.item)
+                        if(length(all.items) > 1){
+                            
+                            # if(last.item == "TTGTTGGC"){
+                            #     print(cur.msg, quote = FALSE)
+
+                            #     print("already_traversed (before):")
+                            #     print(already_traversed[last.item])
+
+                            #     print("dict (before):")
+                            #     print(dict[last.item])
+                            # }
+
+                            dict[last.item][[1]] <- 
+                                dict[last.item][[1]][-which(
+                                    cur.item == dict[last.item][[1]]
+                                )]
+                            
+                            if(already_traversed_index[(last.item == key) & (cur.item == value), "index"] == 0){
+                                # save list
+                                already_traversed[last.item][[1]] <- 
+                                    already_traversed[last.item][[1]][-which(
+                                        cur.item == already_traversed[last.item][[1]]
+                                    )]
+                                already_traversed <- already_traversed[lengths(already_traversed) > 0]
                             } else {
-                                # save reconstructed genome path into list
-                                all.paths <- c(all.paths, private$reconstruct_genome(path))
-                                # pop reverse path from the list 
-                                # until latest branching points first index
-                                for(l in length(branch.point):1){
-                                if(length(branch.point[[l]])>1){
-                                    branch.point[[l]] <- branch.point[[l]][-branch.point[[l]][1]]
-                                    break
-                                } else {
-                                    branch.point[[l]] <- NULL
-                                }
-                                }
-                                main.index = main.index+1
-                                break
+                                already_traversed[last.item][[1]] <- dict[last.item][[1]]
                             }
-                            i = i+1
+                            already_traversed_index[(last.item == key) & (cur.item == value), "index"] <- i
+
+                            # if(last.item == "TTGTTGGC"){
+                            #     print("already_traversed (after):")
+                            #     print(already_traversed[last.item])
+
+                            #     print("dict (after):")
+                            #     print(dict[last.item])
+                            # }
+
+                            if(!is.null(already_traversed[last.item][[1]])){
+                                queue_dict <- c(queue_dict, list(dict))
+                                queue_dict[[1]][last.item][[1]] <- c(dict[last.item][[1]], cur.item)
+                                queue_path <- c(queue_path, list(head(path, n = -1)))
+                                queue_i <- c(queue_i, list(i))
+                            }
+                        } else {
+                            dict[last.item] <- NULL
                         }
                     } else {
-                        ################################
-                        ### iteration two and onward ###
-                        ################################
-                        time1 <- Sys.time()
-                        while(length(branch.point)>=0){
-                            # reset dict
-                            dict <- copy(private$dict)
-                            # re-initialise current path with starting point
-                            path <- start.point[start.point.index]
-                            i = 1
-                            while(TRUE){
-                                time2 <- Sys.time()
-                                if(as.numeric(difftime(time2, time1 , units = 'mins'))>=timer){
-                                    # If the DBG is too large, the execution time is too long
-                                    # Hence, skip current iteration and restart everything
-                                    # with a new sequence
-                                    print("De Bruijn Graph too large. Skip to next iteration.", 
-                                            quote = FALSE)
-                                    return()
-                                }
-                                
-                                last.item <- tail(path, n = 1)
-                                all.items <- dict[last.item][[1]]
-                                if(i<=length(branch.point)){
-                                    # always traverse the tree along the left-most path
-                                    new.item  <- all.items[branch.point[[i]][1]]
-                                } else {
-                                    new.item  <- all.items[1]
-                                    # store the number of branching points per step
-                                    if(length(all.items)>0){
-                                        branch.point[[i]] <- seq(1,length(all.items),1)
-                                    }
-                                }
-                                if(length(new.item)>0){
-                                    path <- c(path, new.item)
-                                    if(length(dict[last.item][[1]])>1){
-                                        dict[last.item][[1]] <- 
-                                            dict[last.item][[1]][-which(
-                                                new.item==dict[last.item][[1]]
-                                        )]
-                                    } else {
-                                        dict[last.item] <- NULL
-                                    }
-                                } else {
-                                    # save reconstructed genome path into list
-                                    all.paths <- c(all.paths, private$reconstruct_genome(path))
-                                    # pop reverse path from the list 
-                                    # until latest branching points first index
-                                    for(l in length(branch.point):1){
-                                        if(length(branch.point[[l]])>1){
-                                            branch.point[[l]] <- branch.point[[l]][-branch.point[[l]][1]]
-                                            break
-                                        } else {
-                                            branch.point[[l]] <- NULL
-                                        }
-                                    }
-                                    break
-                                }
-                                i = i+1
-                            }
-                            # if no more branches to traverse with current starting point save all
-                            # generated strings from current starting point to another list; 
-                            # restart everything with different starting point
-                            if(length(branch.point)==0){
-                                pathways <- c(pathways, all.paths)
-                                start.point.index = start.point.index+1
-                                continue = FALSE
-                                break
-                            }
+                        # save reconstructed genome path into list
+                        all.paths <- c(all.paths, reconstruct_genome(path))
+                        # print(paste0(i, " ", reconstruct_genome(path)))
+
+                        # reset loop based on current queue
+                        list.len <- length(queue_i)
+                        if(list.len > 0){
+                            i <- queue_i[[list.len]]
+                            dict <- queue_dict[[list.len]]
+                            path <- queue_path[[list.len]]
+
+                            queue_dict <- queue_dict[-list.len]
+                            queue_path <- queue_path[-list.len]
+                            queue_i <- queue_i[-list.len]
+                        } else {
+                            break
                         }
                     }
+                    i <- i+1
                 }
-                # setTxtProgressBar(pb, start.point.index)
-            }
-            # close(pb)
-            self$pathways <- unlist(pathways, use.names = FALSE)
+                return(unlist(all.paths, use.names = FALSE))
+            })
+            # unlist(all.paths, use.names = FALSE)
+            # all.paths
+            # paste(self$genome_seq, collapse = "")
 
-            total.time <- Sys.time() - t1
-            cat("DONE! --", signif(total.time[[1]], 2), 
-                attr(total.time, "units"), "\n")
-        },
+            ####################################################################################
+            self$pathways <- unlist(all.paths, use.names = FALSE)
 
-        #' @description
-        #' Reconstruct genome from assembly
-        #' @return Character vector of reconstructed genome.
-        reconstruct_genome = function(path){
-            # initialise vector to save genome path
-            genome <- character()
-            # reconstruct genome path for a given string
-            len <- nchar(path[1])
-            genome <- c(
-                substring(text = path[1], first = 1:len, last = 1:len),
-                substring(text = path[2:length(path)], first = len, last = len)
-            )
-            genome <- paste(genome, collapse = "")
-            return(genome)
+            # total.time <- Sys.time() - t1
+            # cat("DONE! --", signif(total.time[[1]], 2), 
+            #     attr(total.time, "units"), "\n")
         },
 
         #' @description
@@ -504,8 +519,8 @@ DBG <- R6::R6Class(
                     denovo.result = self$pathways[path],
                     denovo.len = nchar(self$pathways[path]),
                     bp.score = bp.score,
-                    # bp.score.norm = bp.score/kmer.count,
-                    bp.score.norm = bp.score/nchar(self$pathways[path]),
+                    bp.score.norm = bp.score/kmer.count,
+                    # bp.score.norm = bp.score/nchar(self$pathways[path]),
                     kmer.count = kmer.count,
                     kmer.break = kmer.break
                 ))

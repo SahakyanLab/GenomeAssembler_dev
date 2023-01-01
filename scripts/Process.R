@@ -11,28 +11,32 @@ source("../lib/GenerateReads.R")
 source("../lib/DBG.R")
 
 assembler <- DBG$new(
-    seq_len = 800,
-    read_len = 100,
+    seq_len = 1000,
+    read_len = 50,
     G_cont = 0.25,
     C_cont = 0.25,
     A_cont = 0.1,
     kmer = 8,
-    dbg_kmer = 9,
+    dbg_kmer = 11,
     seed = 1,
     action = "ratio"
 )
 assembler$run_assembler()
 
+print(dim(assembler$results))
 paste(assembler$genome_seq, collapse = "")
 head(assembler$results, n=5)
 
+setorder(assembler$results, -bp.score)
+head(assembler$results, n=5)
+
 # private=self=NULL
-# private$seq_len = 50
-# private$read_len = 20
+# private$seq_len = 100
+# private$read_len = 50
 # private$G_cont = 0.25
 # private$C_cont = 0.25
 # private$A_cont = 0.1
-# self$kmer = 8
-# private$dbg_kmer = 9
+# self$kmer = 6
+# self$dbg_kmer = 11
 # private$seed = 1
 # private$action = "ratio"
