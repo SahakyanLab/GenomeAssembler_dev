@@ -13,19 +13,25 @@ GenerateReads <- R6::R6Class(
         #'  Kmer can only take values of c(4,6,8).
         kmer = 4,
 
+        #' @field dbg_kmer Numeric vector of the k-mer sizes for use in the 
+        #'  de bruijn graph assembly process.
+        dbg_kmer = 9,
+
         #' @field dbg_summary List of the summary statistics of the assembly process.
         dbg_summary = NULL,
 
-        initialize = function(seq_len, read_len, G_cont, C_cont, 
-                              A_cont, kmer, seed, action){
+        initialize = function(seq_len, read_len, G_cont, C_cont, A_cont, 
+                              kmer, dbg_kmer, seed, action, uniform_prob){
             if(!missing(seq_len)) private$seq_len <- seq_len
             if(!missing(read_len)) private$read_len <- read_len
             if(!missing(G_cont)) private$G_cont <- G_cont
             if(!missing(C_cont)) private$C_cont <- C_cont
             if(!missing(A_cont)) private$A_cont <- A_cont
             if(!missing(kmer)) self$kmer <- kmer
+            if(!missing(dbg_kmer)) self$dbg_kmer <- dbg_kmer
             if(!missing(seed)) private$seed <- seed
             if(!missing(action)) private$action <- action
+            if(!missing(uniform_prob)) private$uniform_prob <- uniform_prob
 
             private$get_prob_values()
         },
@@ -65,6 +71,10 @@ GenerateReads <- R6::R6Class(
         #' @field cols_to_keep Character vector. Columns to keep from df_prob.
         cols_to_keep = NULL,
 
+        #' @field uniform_prob Boolean. If TRUE, breakage probabilities are randomly
+        #'  sampled from a uniform distribution.
+        uniform_prob = FALSE,
+
         #' @description
         #' Get probability values for ultrasonication experiments.
         #' @return None.
@@ -75,6 +85,11 @@ GenerateReads <- R6::R6Class(
                               self$kmer, ".csv"),
                 showProgress = FALSE
             )
+
+            if(private$action == "zscore"){
+                df.prob[, zscore := (zscore-min(zscore))/(max(zscore)-min(zscore))]
+            }
+
             private$cols_to_keep <- to.keep <- c("kmer", private$action)
             self$df_prob <- df.prob[, ..to.keep]
         },
@@ -233,9 +248,13 @@ GenerateReads <- R6::R6Class(
             fwd.kmer.ind <- which(!is.na(fwd.ind))
             kmer.from.seq$prob[fwd.kmer.ind] <- self$df_prob$prob[fwd.prob.ind]
 
-            # sample 50k breakpoint positions at a time
+            if(private$uniform_prob){
+                kmer.from.seq[, prob := 1/nrow(kmer.from.seq)]
+            }
+
+            # sample 10k breakpoint positions at a time
             len.breakpoint.positions <- private$seq_len*10000
-            len.sampling <- 50000
+            len.sampling <- 10000
             breakpoint.positions <- replicate(
                 n = len.breakpoint.positions/len.sampling, {
                 sampling <- sample(

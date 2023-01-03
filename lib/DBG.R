@@ -23,9 +23,8 @@ DBG <- R6::R6Class(
         #' @field results Data.table of assembled solutions and their scores.
         results = NULL,
 
-        initialize = function(seq_len, read_len, G_cont, C_cont, 
-                              A_cont, kmer, dbg_kmer, seed, action){
-            if(!missing(dbg_kmer)) self$dbg_kmer <- dbg_kmer
+        initialize = function(seq_len, read_len, G_cont, C_cont, A_cont, 
+                              kmer, dbg_kmer, seed, action, uniform_prob){
             super$initialize(
                 seq_len = seq_len,
                 read_len = read_len,
@@ -33,8 +32,10 @@ DBG <- R6::R6Class(
                 C_cont = C_cont,
                 A_cont = A_cont,
                 kmer = kmer,
+                dbg_kmer = dbg_kmer,
                 seed = seed,
-                action = action
+                action = action,
+                uniform_prob = uniform_prob
             )
         },
 
@@ -310,42 +311,14 @@ DBG <- R6::R6Class(
                 path <- start.point[x]
                 i <- 1
 
-                # all.paths=unlist(all.paths)
-                # test=gregexpr(pattern = all.paths[25], text = all.paths)
-                # test.loop=sapply(1:length(test), function(x){
-                #     identical(test[[x]], all.paths[25])
-                # })
-                # which(test.loop)
-
-                # duplicated(all.paths)
-                # all.paths[25]
-
-                # sort(all.paths)
-
                 while(TRUE){
                     last.item <- tail(path, n = 1)
                     all.items <- dict[last.item][[1]]
                     cur.item <- all.items[1]
-                    # cur.msg <- paste0(
-                    #     "Last item:  ", last.item, 
-                    #     " -> ", cur.item, ". ", i
-                    #     # " -> ", all.items[1], ",", all.items[2], ". ", i
-                    # )
 
                     if(length(all.items) > 0){
                         path <- c(path, cur.item)
                         if(length(all.items) > 1){
-                            
-                            # if(last.item == "TTGTTGGC"){
-                            #     print(cur.msg, quote = FALSE)
-
-                            #     print("already_traversed (before):")
-                            #     print(already_traversed[last.item])
-
-                            #     print("dict (before):")
-                            #     print(dict[last.item])
-                            # }
-
                             dict[last.item][[1]] <- 
                                 dict[last.item][[1]][-which(
                                     cur.item == dict[last.item][[1]]
@@ -363,14 +336,6 @@ DBG <- R6::R6Class(
                             }
                             already_traversed_index[(last.item == key) & (cur.item == value), "index"] <- i
 
-                            # if(last.item == "TTGTTGGC"){
-                            #     print("already_traversed (after):")
-                            #     print(already_traversed[last.item])
-
-                            #     print("dict (after):")
-                            #     print(dict[last.item])
-                            # }
-
                             if(!is.null(already_traversed[last.item][[1]])){
                                 queue_dict <- c(queue_dict, list(dict))
                                 queue_dict[[1]][last.item][[1]] <- c(dict[last.item][[1]], cur.item)
@@ -383,7 +348,6 @@ DBG <- R6::R6Class(
                     } else {
                         # save reconstructed genome path into list
                         all.paths <- c(all.paths, reconstruct_genome(path))
-                        # print(paste0(i, " ", reconstruct_genome(path)))
 
                         # reset loop based on current queue
                         list.len <- length(queue_i)
@@ -403,16 +367,7 @@ DBG <- R6::R6Class(
                 }
                 return(unlist(all.paths, use.names = FALSE))
             })
-            # unlist(all.paths, use.names = FALSE)
-            # all.paths
-            # paste(self$genome_seq, collapse = "")
-
-            ####################################################################################
             self$pathways <- unlist(all.paths, use.names = FALSE)
-
-            # total.time <- Sys.time() - t1
-            # cat("DONE! --", signif(total.time[[1]], 2), 
-            #     attr(total.time, "units"), "\n")
         },
 
         #' @description
@@ -528,7 +483,7 @@ DBG <- R6::R6Class(
             res <- rbindlist(res)
 
             # only accept the top 50% of the de novo assembled solutions
-            setorder(res, -bp.score.norm)
+            setorder(res, -bp.score)
             self$results <- res[complete.cases(res)]
         }
     )
