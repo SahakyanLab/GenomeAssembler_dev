@@ -10,7 +10,7 @@ setwd("/Users/paddy/Documents/DPhil/github_repos/GenomeAssembler_dev/lib/")
 source("../lib/GenerateReads.R")
 source("../lib/DBG.R")
 assembler <- DBG$new(
-    seq_len = 1000,
+    seq_len = 2000,
     read_len = 10,
     G_cont = 0.20,
     C_cont = 0.15,
@@ -33,13 +33,13 @@ paste(assembler$genome_seq, collapse = "")
 # assembler$results
 
 private=self=NULL
-private$seq_len = 1000
+private$seq_len = 2000
 private$read_len = 10
-private$G_cont = 0.25
+private$G_cont = 0.20
 private$C_cont = 0.15
 private$A_cont = 0.20
 self$kmer = 8
-self$dbg_kmer = 7
+self$dbg_kmer = 9
 private$seed = 1
 private$action = "ratio"
 

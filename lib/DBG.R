@@ -387,6 +387,7 @@ DBG <- R6::R6Class(
                     }
                     probs.to.extract <- c(fwd.ind, rev.ind)
                     probs.to.extract <- probs.to.extract[probs.to.extract != 0]
+                    probs.to.extract <- probs.to.extract[complete.cases(probs.to.extract)]
                     
                     if(length(probs.to.extract) > 0){
                         # breakpoint score = prob of breaking k-mer * freq of k-mer broken
