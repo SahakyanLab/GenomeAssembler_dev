@@ -253,7 +253,7 @@ GenerateReads <- R6::R6Class(
             }
 
             # sample 10k breakpoint positions at a time
-            len.breakpoint.positions <- private$seq_len*10000
+            len.breakpoint.positions <- private$seq_len*1000
             len.sampling <- 10000
             breakpoint.positions <- replicate(
                 n = len.breakpoint.positions/len.sampling, {
