@@ -4,44 +4,54 @@ suppressPackageStartupMessages(suppressWarnings(library(stringr)))
 suppressPackageStartupMessages(suppressWarnings(library(data.table)))
 suppressPackageStartupMessages(suppressWarnings(library(pbapply)))
 suppressPackageStartupMessages(suppressWarnings(library(Biostrings)))
+suppressPackageStartupMessages(suppressWarnings(library(Rcpp)))
+suppressPackageStartupMessages(suppressWarnings(library(foreach)))
+suppressPackageStartupMessages(suppressWarnings(library(doParallel)))
+suppressPackageStartupMessages(suppressWarnings(library(doRNG)))
+suppressPackageStartupMessages(suppressWarnings(library(ggplot2)))
 pbo <- pbapply::pboptions(type = "txt", char = "=")
 
 setwd("/Users/paddy/Documents/DPhil/github_repos/GenomeAssembler_dev/lib/")
 source("../lib/GenerateReads.R")
 source("../lib/DBG.R")
+sourceCpp("../lib/edlibFunction.cpp")
 assembler <- DBG$new(
-    seq_len = 2000,
+    seq_len = 100,
     read_len = 10,
     G_cont = 0.20,
     C_cont = 0.15,
     A_cont = 0.20,
     kmer = 8,
     dbg_kmer = 9,
-    seed = 1,
+    seed = 1234,
+    ncpu = 4,
     action = "ratio",
     uniform_prob = FALSE
 )
 assembler$run_assembler()
 
-assembler$results
+dim(assembler$results)
+head(assembler$results)
 assembler$results[1,]
 paste(assembler$genome_seq, collapse = "")
 # assembler$results[denovo.len > 1000]
 
-# assembler$results[, bp.score.norm := bp.score/kmer.break]
-# setorder(assembler$results, -bp.score.norm)
-# assembler$results
+plot(assembler$results$lev.dist.vs.true, assembler$results$bp.score)
+
+# prev = copy(assembler$results)
+# prev[1,]
 
 private=self=NULL
-private$seq_len = 2000
+private$seq_len = 500
 private$read_len = 10
 private$G_cont = 0.20
 private$C_cont = 0.15
 private$A_cont = 0.20
 self$kmer = 8
 self$dbg_kmer = 9
-private$seed = 1
+private$seed = 1234
 private$action = "ratio"
+private$uniform_prob = FALSE
 
 # seq_reads <- GenerateReads$new(
 #     seq_len = 1000,

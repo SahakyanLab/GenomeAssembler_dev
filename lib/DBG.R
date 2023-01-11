@@ -24,7 +24,8 @@ DBG <- R6::R6Class(
         results = NULL,
 
         initialize = function(seq_len, read_len, G_cont, C_cont, A_cont, 
-                              kmer, dbg_kmer, seed, action, uniform_prob){
+                              kmer, dbg_kmer, seed, ncpu, action, uniform_prob){
+            if(!missing(ncpu)) private$ncpu <- ncpu
             super$initialize(
                 seq_len = seq_len,
                 read_len = read_len,
@@ -55,6 +56,7 @@ DBG <- R6::R6Class(
             private$get_contigs()
             private$get_many_scaffolds()
             private$compare_break_scores()
+            private$save_results()
 
             # time taken for full processing for this experiment
             final.t <- Sys.time() - start.time
@@ -81,6 +83,10 @@ DBG <- R6::R6Class(
 
         #' @field branching_nodes Character vector of all nodes that have a branch.
         branching_nodes = NULL,
+
+        #' @field ncpu Numeric vector of the number of cores to use 
+        #'  for parallel execution.
+        ncpu = 2,
 
         #' @description
         #' Extract kmers from sonicated sequencing reads.
@@ -297,132 +303,235 @@ DBG <- R6::R6Class(
             t1 <- Sys.time()
             cur.msg <- "Generating scaffolds from contigs"
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
-            cat(cur.msg, l, "\n", sep = "")
+            cat(paste0(cur.msg, l))
 
             set.seed(private$seed)
-            contig.matrix <- replicate(n = 3000, sample(self$contigs))
+            contig.matrix <- replicate(n = 20000, sample(self$contigs))
             contig.matrix <- cbind(
                 contig.matrix, 
                 matrix(c(self$contigs, sort(self$contigs)), ncol = 2)
             )
-            contig.results <- pbapply::pblapply(1:ncol(contig.matrix), function(x){
-                return(private$assemble_contigs(contigs = contig.matrix[,x]))
-            })
+
+            if(private$ncpu > 1){
+                `%op%` <- `%dopar%`
+            } else {
+                `%op%` <- `%do%`
+            }
+            # set-up cluster for parallel computation
+            cl <- makeCluster(private$ncpu)
+            registerDoParallel(cl)
+            contig.results <- foreach(i = 1:ncol(contig.matrix), 
+                                .combine="rbind",
+                                .export=c(ls(globalenv()), "private", "self"),
+                                .packages=c("foreach", "data.table", "dplyr", "R6"),
+                                .inorder=TRUE)%op%{
+                DBG$parent_env <- environment()
+                return(private$assemble_contigs(contigs = contig.matrix[,i]))
+            } %>% 
+            suppressWarnings() # ignore 'already exporting variables' warning from foreach
+            stopImplicitCluster()
+            stopCluster(cl)
+
+            # time taken for full processing for this experiment
+            total.time <- Sys.time() - t1
+            cat("DONE! --", signif(total.time[[1]], 2), 
+                attr(total.time, "units"), "\n")
+            
+            contig.results <- as.character(contig.results)
             contig.results <- unlist(contig.results, use.names = FALSE)
             self$scaffolds <- unique(contig.results)
-            # self$scaffolds <- self$scaffolds[which(
-            #     nchar(self$scaffolds) <= length(self$genome_seq)
-            # )]
+        },
+
+        #' @description
+        #' Summary statistics of aligning all de novo solutions with sequencing reads.
+        #' @return None.
+        compare_break_scores = function(){
+            t1 <- Sys.time()
+            cur.msg <- "Calculating alignment scores based on breakage probabilities"
+            l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
+            cat(paste0(cur.msg, l))
+
+            if(private$ncpu > 1){
+                `%op%` <- `%dopar%`
+            } else {
+                `%op%` <- `%do%`
+            }
+            # set-up cluster for parallel computation
+            cl <- makeCluster(private$ncpu)
+            registerDoParallel(cl)
+            res <- foreach(i = 1:length(self$scaffolds), 
+                                .combine="rbind",
+                                .export=c(ls(globalenv()), "private", "self"),
+                                .packages=c("foreach", "data.table", "dplyr", "R6"),
+                                .inorder=TRUE)%op%{
+                DBG$parent_env <- environment()
+                return(private$analyse_results(path = self$scaffolds[i]))
+            } %>% 
+            suppressWarnings() # ignore 'already exporting variables' warning from foreach
+            stopImplicitCluster()
+            stopCluster(cl)
+
+            denovo.len <- nchar(self$scaffolds)
+            bp.score <- as.numeric(res[,1])
+            kmer.breaks <- as.numeric(res[,2])
+            df.bp.score <- data.table(
+                denovo.result = self$scaffolds,
+                denovo.len = denovo.len,
+                bp.score = bp.score,
+                bp.score.norm.by.len = bp.score/denovo.len,
+                bp.score.norm.by.break.freq = bp.score/kmer.breaks,
+                kmer.breaks = kmer.breaks
+            )
+            setorder(df.bp.score, -bp.score)
+            df.bp.score <- df.bp.score[complete.cases(df.bp.score)]
+            df.bp.score <- df.bp.score[kmer.breaks != 0]
+
+             # Levenshtein distance calculations
+            lev.mat <- matrix(
+                data = c(
+                    df.bp.score$denovo.result,
+                    rep(paste(self$genome_seq, collapse = ""), 
+                        length(df.bp.score$denovo.result))
+                ),
+                ncol = 2
+            )
+            lev.dist <- as.numeric(LevenshteinLoop(lev.mat))
+            df.bp.score[, lev.dist.vs.true := lev.dist]
+            self$results <- df.bp.score
+            self$dbg_summary$nr_of_solutions <- nrow(self$results)
+
+            # time taken for full processing for this experiment
+            total.time <- Sys.time() - t1
+            cat("DONE! --", signif(total.time[[1]], 2), 
+                attr(total.time, "units"), "\n")
         },
 
         #' @description
         #' Aligns de novo solutions with sequencing reads. Calculates an 
         #' alignment score based on the breakage probabilities.
+        #' @param path Character vector of a genome sequence (one of the de novo solutions).
         #' @return None.
-        compare_break_scores = function(){   
-            t1 <- Sys.time()
-            cur.msg <- "Calculating alignment scores based on breakage probabilities"
-            l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
-            cat(cur.msg, l, "\n", sep = "")
+        analyse_results = function(path){
+            read.matches <- stringr::str_locate_all(
+                string = path,
+                pattern = self$sequencing_reads
+            )
+            read.matches.ind <- which(lengths(read.matches) > 0)
 
-            res <- pbapply::pblapply(self$scaffolds, function(path){
-                read.matches <- stringr::str_locate_all(
-                    string = path,
-                    pattern = self$sequencing_reads
+            if(length(read.matches.ind) > 0){
+                df.read.matches <- as.data.table(do.call(rbind, read.matches[read.matches.ind]))
+                reads <- rep(
+                    self$sequencing_reads[read.matches.ind], 
+                    lengths(read.matches[read.matches.ind])/2
                 )
-                read.matches.ind <- which(lengths(read.matches) > 0)
-
-                if(length(read.matches.ind) > 0){
-                    df.read.matches <- as.data.table(do.call(rbind, read.matches[read.matches.ind]))
-                    reads <- rep(
-                        self$sequencing_reads[read.matches.ind], 
-                        lengths(read.matches[read.matches.ind])/2
+                path.len <- nchar(path)
+                df.read.matches[, read := reads]
+                df.read.matches[, any.ns := stringr::str_detect(string = read, pattern = "N")]
+                df.read.matches[, `:=`(
+                    left.kmer.start = ifelse(any.ns & (start <= self$kmer/2), 
+                        1, start-self$kmer/2
+                    ),
+                    left.kmer.end = ifelse(any.ns & (start <= self$kmer/2), ifelse(
+                        start < self$kmer/2, self$kmer,
+                        start+self$kmer/2-1), start+self$kmer/2-1
+                    ),
+                    right.kmer.start = ifelse(any.ns & (start > self$kmer/2), ifelse(
+                        path.len-end < self$kmer/2, path.len-self$kmer+1, 
+                        end-self$kmer/2+1), end-self$kmer/2+1
+                    ),
+                    right.kmer.end = ifelse(any.ns & (start > self$kmer/2), ifelse(
+                        path.len-end < self$kmer/2, path.len, 
+                        end+self$kmer/2), end+self$kmer/2
                     )
-                    path.len <- nchar(path)
-                    df.read.matches[, read := reads]
-                    df.read.matches[, any.ns := stringr::str_detect(string = read, pattern = "N")]
-                    df.read.matches[, `:=`(
-                        left.kmer.start = ifelse(any.ns & (start <= self$kmer/2), 
-                            1, start-self$kmer/2
-                        ),
-                        left.kmer.end = ifelse(any.ns & (start <= self$kmer/2), ifelse(
-                            start < self$kmer/2, self$kmer,
-                            start+self$kmer/2-1), start+self$kmer/2-1
-                        ),
-                        right.kmer.start = ifelse(any.ns & (start > self$kmer/2), ifelse(
-                            path.len-end < self$kmer/2, path.len-self$kmer+1, 
-                            end-self$kmer/2+1), end-self$kmer/2+1
-                        ),
-                        right.kmer.end = ifelse(any.ns & (start > self$kmer/2), ifelse(
-                            path.len-end < self$kmer/2, path.len, 
-                            end+self$kmer/2), end+self$kmer/2
-                        )
-                    )]
-                    df.read.matches[, `:=`(
-                        kmer.start = substring(
-                            text = path, 
-                            first = left.kmer.start, 
-                            last = left.kmer.end
-                        ),
-                        kmer.end = substring(
-                            text = path, 
-                            first = right.kmer.start, 
-                            last = right.kmer.end
-                        ),
-                        read = NULL
-                    )]
+                )]
+                df.read.matches[, `:=`(
+                    kmer.start = substring(
+                        text = path, 
+                        first = left.kmer.start, 
+                        last = left.kmer.end
+                    ),
+                    kmer.end = substring(
+                        text = path, 
+                        first = right.kmer.start, 
+                        last = right.kmer.end
+                    ),
+                    read = NULL
+                )]
 
-                    to.keep <- c("kmer.start", "kmer.end")
-                    kmers <- c(df.read.matches$kmer.start, df.read.matches$kmer.end)
+                to.keep <- c("kmer.start", "kmer.end")
+                kmers <- c(df.read.matches$kmer.start, df.read.matches$kmer.end)
 
-                    # obtain index of forward and reverse complement k-mers
-                    fwd.ind <- match(kmers, self$df_prob$kmer)
-                    rev.ind <- is.na(fwd.ind)
-                    fwd.ind <- fwd.ind[!is.na(fwd.ind)]
-                    if(any(rev.ind)){
-                        rev.comp <- paste(Biostrings::reverseComplement(
-                            Biostrings::DNAStringSet(kmers[which(rev.ind)])
-                        ))
-                        rev.ind <- match(rev.comp, self$df_prob$kmer)
-                    }
-                    probs.to.extract <- c(fwd.ind, rev.ind)
-                    probs.to.extract <- probs.to.extract[probs.to.extract != 0]
-                    probs.to.extract <- probs.to.extract[complete.cases(probs.to.extract)]
-                    
-                    if(length(probs.to.extract) > 0){
-                        # breakpoint score = prob of breaking k-mer * freq of k-mer broken
-                        probs.to.extract <- as.data.table(table(probs.to.extract))
-                        setnames(probs.to.extract, c("ind", "N"))
-                        probs.to.extract[, names(probs.to.extract) := lapply(.SD, as.numeric)]
-                        probs.to.extract[, prob := self$df_prob$prob[ind]]
-                        probs.to.extract[, bp.score := prob*N]
-                        bp.score <- sum(probs.to.extract$bp.score, na.rm = TRUE)
+                # obtain index of forward and reverse complement k-mers
+                fwd.ind <- match(kmers, self$df_prob$kmer)
+                rev.ind <- is.na(fwd.ind)
+                fwd.ind <- fwd.ind[!is.na(fwd.ind)]
+                if(any(rev.ind)){
+                    rev.comp <- paste(Biostrings::reverseComplement(
+                        Biostrings::DNAStringSet(kmers[which(rev.ind)])
+                    ))
+                    rev.ind <- match(rev.comp, self$df_prob$kmer)
+                }
+                probs.to.extract <- c(fwd.ind, rev.ind)
+                probs.to.extract <- probs.to.extract[probs.to.extract != 0]
+                probs.to.extract <- probs.to.extract[complete.cases(probs.to.extract)]
+                
+                if(length(probs.to.extract) > 0){
+                    # breakpoint score = prob of breaking k-mer * freq of k-mer broken
+                    probs.to.extract <- as.data.table(table(probs.to.extract))
+                    setnames(probs.to.extract, c("ind", "N"))
+                    probs.to.extract[, names(probs.to.extract) := lapply(.SD, as.numeric)]
 
-                        # nr of k-mers broken
-                        kmer.breaks <- nrow(probs.to.extract)
-                    } else {
-                        bp.score <- 0
-                        kmer.breaks <- 0
-                    }
+                    # true breakage probabilities
+                    probs.to.extract[, prob := self$df_prob$prob[ind]]
+                    probs.to.extract[, bp.score := prob*N]
+                    bp.score <- sum(probs.to.extract$bp.score, na.rm = TRUE)
+
+                    # nr of k-mers broken
+                    kmer.breaks <- nrow(probs.to.extract)
                 } else {
                     bp.score <- 0
                     kmer.breaks <- 0
                 }
-                return(list(bp.score, kmer.breaks))
-            })
-            denovo.len <- nchar(self$scaffolds)
-            bp.score <- sapply(res, `[[`, 1)
-            kmer.breaks <- sapply(res, `[[`, 2)
-            df.bp.score <- data.table(
-                denovo.result = self$scaffolds,
-                denovo.len = denovo.len,
-                bp.score = bp.score,
-                # bp.score.norm = bp.score/kmer.breaks,
-                bp.score.norm = bp.score/denovo.len,
-                kmer.breaks = kmer.breaks
+            } else {
+                bp.score <- 0
+                kmer.breaks <- 0
+            }
+            return(list(bp.score, kmer.breaks))
+        },
+
+        #' @description
+        #' Save results into csv files.
+        #' @return None.
+        save_results = function(){
+            # progress message
+            t1 <- Sys.time()
+            cur.msg <- "Saving results as RDS file"
+            l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
+            cat(paste0(cur.msg, l))
+
+            # as RDS file
+            self$dbg_summary$genome_seq <- paste(self$genome_seq, collapse = "")
+            self$dbg_summary$results <- self$results
+
+            dir.create(
+                path = "../data/results",
+                showWarnings = FALSE,
+                recursive = TRUE
             )
-            setorder(df.bp.score, -bp.score)
-            self$results <- df.bp.score[complete.cases(df.bp.score)]
+            saveRDS(
+                self$dbg_summary,
+                file = paste0(
+                    "../data/results/kmer-", self$kmer, 
+                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    "_UniformProb-", as.character(private$uniform_prob),
+                    ".RData"
+                )
+            )
+
+            total.time <- Sys.time() - t1
+            cat("DONE! --", signif(total.time[[1]], 2), 
+                attr(total.time, "units"), "\n")
         },
 
         #' @description

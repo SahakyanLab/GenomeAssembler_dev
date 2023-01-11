@@ -92,6 +92,7 @@ GenerateReads <- R6::R6Class(
 
             private$cols_to_keep <- to.keep <- c("kmer", private$action)
             self$df_prob <- df.prob[, ..to.keep]
+            if(private$uniform_prob) self$df_prob[, 2] <- 1/nrow(self$df_prob)
         },
 
         #' @description
@@ -109,6 +110,13 @@ GenerateReads <- R6::R6Class(
             private$C_cont <- round(private$C_cont*private$seq_len)
             private$A_cont <- round(private$A_cont*private$seq_len)
             T_cont <- private$seq_len-(private$G_cont+private$C_cont+private$A_cont)
+
+            self$dbg_summary$base_composition <- c(
+                "G_cont" = private$G_cont,
+                "C_cont" = private$C_cont,
+                "A_cont" = private$A_cont,
+                "T_cont" = T_cont
+            )
             
             # Sum of base content not equal to seq_len of genome
             base::stopifnot(identical(
@@ -129,6 +137,7 @@ GenerateReads <- R6::R6Class(
                 size = private$seq_len, 
                 replace = FALSE
             )
+            self$dbg_summary$seq_len <- length(self$genome_seq)
 
             total.time <- Sys.time() - t1
             cat("DONE! --", signif(total.time[[1]], 2), 
@@ -247,35 +256,123 @@ GenerateReads <- R6::R6Class(
             fwd.prob.ind <- fwd.ind[which(!is.na(fwd.ind))]
             fwd.kmer.ind <- which(!is.na(fwd.ind))
             kmer.from.seq$prob[fwd.kmer.ind] <- self$df_prob$prob[fwd.prob.ind]
+            if(private$uniform_prob) kmer.from.seq[, prob := 1/nrow(kmer.from.seq)]
 
-            if(private$uniform_prob){
-                kmer.from.seq[, prob := 1/nrow(kmer.from.seq)]
+            # plot breakage probability over the full genome sequence
+            if(!private$uniform_prob){
+                p1 <- as_tibble(kmer.from.seq) %>% 
+                    dplyr::mutate(index = 1:dplyr::n()) %>% 
+                    ggplot(aes(x = index, y = prob)) + 
+                    geom_col() +
+                    scale_x_continuous(expand = c(0, 0)) +
+                    theme_bw() + 
+                    theme(
+                        axis.text.x = element_blank(),
+                        axis.ticks.x = element_blank(),
+                        panel.background = element_rect(fill = "white"),
+                        panel.grid = element_blank()
+                    ) + 
+                    labs(
+                        x = paste0("Genome sequence (", self$kmer, "-mer sliding window)"),
+                        y = "Breakage probabilitiy",
+                        title = "Kmeric breakage probabilities of genome sequence",
+                        subtitle = paste0(
+                            "Kmer: ", self$kmer, "\n",
+                            "Sequence length: ", length(self$genome_seq), "\n",
+                            "Sequencing read length: ", private$read_len, "\n",
+                            "Sequence set.seed: ", private$seed, "\n", 
+                            "Uniform prob: ", as.logical(private$uniform_prob)
+                        )
+                    )
+                
+                dir.create(
+                    path = "../figures/",
+                    showWarnings = FALSE
+                )
+                ggsave(
+                    filename = paste0(
+                        "../figures/BreakProb-vs-GenomeSeq_kmer-", self$kmer, 
+                        "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                        "_ReadLen-", private$read_len,
+                        "_UniformProb-", as.character(private$uniform_prob),
+                        ".pdf"
+                    ), 
+                    plot = p1,
+                    width = 11, 
+                    height = 8
+                )
             }
 
             # sample 10k breakpoint positions at a time
-            len.breakpoint.positions <- private$seq_len*1000
-            len.sampling <- 10000
-            breakpoint.positions <- replicate(
-                n = len.breakpoint.positions/len.sampling, {
-                sampling <- sample(
-                    x = nrow(kmer.from.seq), 
-                    size = len.sampling,
-                    replace = TRUE, 
+            # len.breakpoint.positions <- private$seq_len*1000
+            len.sampling <- 10000  
+            if(private$uniform_prob){
+                breakpoint.positions <- rnorm(
+                    n = len.sampling,
+                    mean = nrow(kmer.from.seq)/2,
+                    sd = nrow(kmer.from.seq)/4
+                )
+                breakpoint.positions <- round(breakpoint.positions)
+                breakpoint.positions <- breakpoint.positions[
+                    (breakpoint.positions > 0) & (breakpoint.positions <= nrow(kmer.from.seq))
+                ]
+            } else {
+                breakpoint.positions <- sample(
+                    x = nrow(kmer.from.seq),
+                    size = len.sampling, 
+                    replace = TRUE,
                     prob = kmer.from.seq$prob
                 )
-            }, simplify = TRUE)
+            }
 
-            # generate all reads
-            sampling.points <- sample(
-                x = breakpoint.positions,
-                size = len.sampling, 
-                replace = FALSE
+            # plot breakage probability over the full genome sequence
+            p1 <- as_tibble(breakpoint.positions) %>% 
+                dplyr::rename_with(~c("freq")) %>% 
+                ggplot(aes(x = freq)) + 
+                geom_histogram(
+                    fill = "grey", 
+                    col = "black", 
+                    bins = 50
+                ) +  
+                scale_x_continuous(expand = c(0, 0)) +
+                theme_bw() + 
+                theme(
+                    panel.background = element_rect(fill = "white"),
+                    panel.grid = element_blank()
+                ) + 
+                labs(
+                    x = "Genomic sequence position",,
+                    y = "Frequency",
+                    title = "Probability-weighted sampling of genomic sequence positions",
+                    subtitle = paste0(
+                        "Kmer: ", self$kmer, "\n",
+                        "Sequence length: ", length(self$genome_seq), "\n",
+                        "Sequencing read length: ", private$read_len, "\n",
+                        "Sequence set.seed: ", private$seed, "\n", 
+                        "Uniform prob: ", as.logical(private$uniform_prob)
+                    )
+                )
+            ggsave(
+                filename = paste0(
+                    "../figures/ProbWeightedGenomeSeqSampling_kmer-", self$kmer, 
+                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    "_UniformProb-", as.character(private$uniform_prob),
+                    ".pdf"
+                ), 
+                plot = p1,
+                width = 11, 
+                height = 8
             )
 
-            start <- seq(from = 1, to = len.sampling, by = 2)
-            end <- seq(from = 2, to = len.sampling, by = 2)
+            # generate all reads
+            if(length(breakpoint.positions) %%2 != 0){
+                breakpoint.positions <- head(breakpoint.positions, -1)
+            }
+            start <- seq(from = 1, to = length(breakpoint.positions), by = 2, )
+            end <- seq(from = 2, to = length(breakpoint.positions), by = 2)
             mat <- matrix(
-                data = c(sampling.points[start], sampling.points[end]), 
+                data = c(breakpoint.positions[start], breakpoint.positions[end]), 
                 nrow = 2
             )
             mat <- apply(mat, 2, sort)
@@ -285,7 +382,7 @@ GenerateReads <- R6::R6Class(
             )
 
             # filter sequencing reads
-            mat.ir <- mat.ir[which(width(mat.ir) != 0),] 
+            mat.ir <- mat.ir[which(width(mat.ir) != 0),]
             reads.sd <- ceiling(sd(width(mat.ir), na.rm = TRUE))
             lower.limit <- private$read_len-reads.sd
             upper.limit <- private$read_len+reads.sd
@@ -308,6 +405,7 @@ GenerateReads <- R6::R6Class(
                 (length(reads)*private$read_len)/length(self$genome_seq),
                 digits = 3
             )
+            self$dbg_summary$nr_of_reads <- length(reads)
 
             # # remove dummy bases on each end of the randomly generated sequence
             # self$genome_seq <- self$genome_seq[
