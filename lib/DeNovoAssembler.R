@@ -23,7 +23,7 @@ DeNovoAssembler <- R6::R6Class(
         #' @field results Data.table of assembled solutions and their scores.
         results = NULL,
 
-        initialize = function(seq_len, read_len, kmer, dbg_kmer, ncpu, seed, action){
+        initialize = function(seq_len, read_len, kmer, dbg_kmer, ncpu, seed, ind, action){
             if(!missing(ncpu)) private$ncpu <- ncpu
             super$initialize(
                 seq_len = seq_len,
@@ -31,21 +31,24 @@ DeNovoAssembler <- R6::R6Class(
                 kmer = kmer,
                 dbg_kmer = dbg_kmer,
                 seed = seed,
-                action = action
+                action = action,
+                ind = ind
             )
         },
 
         #' @description
         #' Run de novo genome assembly process with de bruijn graph data structure.
-        #' @param ind Numeric vector. Subsets the sequence from all sampled ref sequences.
+        #' @param bins Numeric vector of how many breaks to create when plotting results.
         #' @return None.
-        run_assembler = function(ind = 1){
+        run_assembler = function(bins = 10){
             start.time <- Sys.time()
-            cur.msg <- "Running a proof of principle simulation"
+            cur.msg <- paste0("Running a proof of principle simulation ", 
+                              "for experiment: ", private$ind, "/", 1000)
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(cur.msg, l, "\n", sep = "")
 
-            self$get_reads(ind = ind)
+            private$load_all_ref_seq()
+            self$get_reads()
             private$get_kmers_from_reads()
             private$wdbg_from_kmers()
             private$get_branching_nodes()
@@ -53,6 +56,7 @@ DeNovoAssembler <- R6::R6Class(
             private$get_many_scaffolds()
             private$compare_break_scores()
             private$save_results()
+            private$quick_plots(bins = bins)
 
             # time taken for full processing for this experiment
             final.t <- Sys.time() - start.time
@@ -95,14 +99,19 @@ DeNovoAssembler <- R6::R6Class(
             cat(paste0(cur.msg, l))
 
             # read one
-            read.one <- fread("../data/reads/read_one.txt", header = FALSE, showProgress = FALSE)
+            read.one <- fread(
+                paste0(
+                    "../data/reads/exp_", private$ind, 
+                    "/read_1",
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    ".txt" 
+                ),
+                header = FALSE, 
+                showProgress = FALSE
+            )
             self$sequencing_reads$read_one <- unlist(read.one$V1)
-
-            # read two
-            read.two <- fread("../data/reads/read_two.txt", header = FALSE, showProgress = FALSE)
-            read.two <- unlist(read.two$V1)
-            read.two <- paste(Biostrings::reverseComplement(Biostrings::DNAStringSet(read.two)))
-            self$sequencing_reads$read_two <- read.two
 
             # obtain all k-mers per read
             read.kmers <- lapply(1:length(self$sequencing_reads$read_one), function(i){
@@ -341,7 +350,7 @@ DeNovoAssembler <- R6::R6Class(
                                 .packages=c("foreach", "data.table", "dplyr", "R6"),
                                 .inorder=TRUE)%op%{
                 DeNovoAssembler$parent_env <- environment()
-                if(private$ncpu < 2) setTxtProgressBar(pb, i)
+                # if(private$ncpu < 2) setTxtProgressBar(pb, i)
                 return(private$assemble_contigs(contigs = contig.matrix[[i]]))
             } %>% 
             suppressWarnings() # ignore 'already exporting variables' warning from foreach
@@ -386,6 +395,7 @@ DeNovoAssembler <- R6::R6Class(
                     style = 3
                 )
             }
+
             # set-up cluster for parallel computation
             cl <- makeCluster(private$ncpu)
             registerDoParallel(cl)
@@ -403,12 +413,12 @@ DeNovoAssembler <- R6::R6Class(
             stopCluster(cl)
             if(private$ncpu == 1) close(pb)
 
-            if(all(c("matrix", "array") == class(res))){
-                bp.score <- as.numeric(res[,1])
-                kmer.breaks <- as.numeric(res[,2])
-            } else {
+            if(is.null(dim(res))){
                 bp.score <- res[[1]]
                 kmer.breaks <- res[[2]]
+            } else {
+                bp.score <- as.numeric(res[,1])
+                kmer.breaks <- as.numeric(res[,2])
             }
             denovo.len <- nchar(self$scaffolds)
             df.bp.score <- data.table(
@@ -451,7 +461,7 @@ DeNovoAssembler <- R6::R6Class(
         #' @param path Character vector of a genome sequence (one of the de novo solutions).
         #' @return None.
         analyse_results = function(path){
-            get.score <- function(sequencing.reads, is.read.two){
+            get.score <- function(path, sequencing.reads, is.read.two){
                 read.matches <- stringr::str_locate_all(
                     string = path,
                     pattern = sequencing.reads
@@ -548,17 +558,10 @@ DeNovoAssembler <- R6::R6Class(
                 }
                 return(list(bp.score, kmer.breaks))
             }
-            read.one.scores <- get.score(
+            return(get.score(
+                path = path,
                 sequencing.reads = self$sequencing_reads$read_one, 
                 is.read.two = FALSE
-            )
-            read.two.scores <- get.score(
-                sequencing.reads = self$sequencing_reads$read_two, 
-                is.read.two = TRUE
-            )
-            return(list(
-                read.one.scores[[1]]+read.two.scores[[1]],
-                read.one.scores[[2]]+read.two.scores[[2]]
             ))
         },
 
@@ -603,6 +606,77 @@ DeNovoAssembler <- R6::R6Class(
             total.time <- Sys.time() - t1
             cat("DONE! --", signif(total.time[[1]], 2), 
                 attr(total.time, "units"), "\n")
+        },
+
+        #' @description
+        #' Generate some quick plots after assembly results are obtained.
+        #' @param bins Numeric vector of how many breaks to create when plotting results.
+        #' @return None.
+        quick_plots = function(bins){
+            # true break score vs. levenshtein distance
+            self$results[, bins := cut(self$results$lev.dist.vs.true, breaks = bins)]
+            mytitle <- paste0(
+                "Breakage probability scores vs. binned ",
+                "levenshtein distance to the true solution"
+            )
+            mysubtitle <- paste0(
+                "Kmer: ", self$kmer, ". ",
+                "Sequence length: ", private$seq_len, ". ",
+                "Sequence set.seed: ", private$seed, ". ",
+                "Experiment: ", private$ind, ". ",
+                "Nr. of solutions: ", nrow(self$results)
+            )
+
+            pdf(
+                file = paste0(
+                    "../figures/Breakscore-vs-Levdist_kmer-", self$kmer, 
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    "_exp-", private$ind,
+                    ".pdf"
+                ),
+                width = 19, 
+                height = 5
+            )
+            par(mfrow = c(1,3))
+            par(mar=c(7,6,4,1))
+            boxplot(
+                bp.score ~ bins, 
+                data = self$results, 
+                frame = FALSE,
+                col = "lightblue",
+                border = "black",
+                xlab = "",
+                ylab = "Actual",
+                main = "",
+                las = 3
+            )
+            mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
+            mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
+            boxplot(
+                bp.score.norm.by.len ~ bins, 
+                data = self$results, 
+                frame = FALSE,
+                col = "lightblue",
+                border = "black",
+                xlab = "",
+                ylab = "Normalised by length",
+                main = "",
+                las = 3
+            )
+            boxplot(
+                bp.score.norm.by.break.freq ~ bins, 
+                data = self$results, 
+                frame = FALSE,
+                col = "lightblue",
+                border = "black",
+                xlab = "",
+                ylab = "Normalised by nr of breaks",
+                main = "",
+                las = 3
+            )
+            plot.saved <- dev.off()
         },
 
         #' @description

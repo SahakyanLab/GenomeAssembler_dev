@@ -20,16 +20,16 @@ GenerateReads <- R6::R6Class(
         #' @field dbg_summary List of the summary statistics of the assembly process.
         dbg_summary = NULL,
 
-        initialize = function(seq_len, read_len, kmer, dbg_kmer, seed, action){
+        initialize = function(seq_len, read_len, kmer, dbg_kmer, seed, ind, action){
             if(!missing(seq_len)) private$seq_len <- seq_len
             if(!missing(read_len)) private$read_len <- read_len
             if(!missing(kmer)) self$kmer <- kmer
             if(!missing(dbg_kmer)) self$dbg_kmer <- dbg_kmer
             if(!missing(seed)) private$seed <- seed
             if(!missing(action)) private$action <- action
+            if(!missing(ind)) private$ind <- ind
 
             private$get_prob_values()
-            private$load_all_ref_seq()
         },
 
         #' @description
@@ -101,10 +101,9 @@ GenerateReads <- R6::R6Class(
         #' @description
         #' Generates random reference sequence and simulates the sonication process
         #' to produce sequencing reads biased by the intrinsic breakage probabilities.
-        #' @param ind Numeric vector. Subsets the sequence from all sampled ref sequences.
         #' @return None.
-        get_reads = function(ind){
-            private$extract_genome_seq(ind = ind)
+        get_reads = function(){
+            private$extract_genome_seq()
             private$generate_sequencing_reads()
         }
     ),
@@ -127,6 +126,9 @@ GenerateReads <- R6::R6Class(
 
         #' @field genome BSgenome object of the human reference genome hg38.
         genome = NULL,
+
+        #' @field ind Numeric vector of the subsetted reference sequence.
+        ind = NULL,
 
         #' @description
         #' Get probability values for ultrasonication experiments.
@@ -164,25 +166,24 @@ GenerateReads <- R6::R6Class(
 
         #' @description
         #' Generate random sequence for use as the reference genome.
-        #' @param ind Numeric vector. Subsets the sequence from all sampled ref sequences.
         #' @return None.
-        extract_genome_seq = function(ind){
+        extract_genome_seq = function(){
             # progress message
             t1 <- Sys.time()
             cur.msg <- "Extracting reference genome"
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(paste0(cur.msg, l))
             
-            self$genome_seq <- paste(private$genome[ind])
+            self$genome_seq <- paste(private$genome[private$ind])
             self$genome_seq <- strsplit(self$genome_seq, split = "")[[1]]
 
             # extract base contents
             all.letters <- Biostrings::letterFrequency(
-                private$genome[ind], 
+                private$genome[private$ind], 
                 letters = "ACGT", 
                 OR = 0
             )
-            all.letters <- all.letters/width(private$genome[ind])
+            all.letters <- all.letters/width(private$genome[private$ind])
             self$dbg_summary$base_composition <- signif(all.letters[1,], digits = 4)
 
             total.time <- Sys.time() - t1
@@ -308,7 +309,6 @@ GenerateReads <- R6::R6Class(
             mysubtitle <- paste0(
                 "Kmer: ", self$kmer, ". ",
                 "Sequence length: ", length(self$genome_seq), ". ",
-                "Sequencing read length: ", private$read_len, ". ",
                 "Sequence set.seed: ", private$seed
             )
             dir.create(
@@ -318,8 +318,8 @@ GenerateReads <- R6::R6Class(
             pdf(
                 file = paste0(
                     "../figures/BreakProb-vs-GenomeSeq_kmer-", self$kmer, 
-                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
                     ".pdf"
                 ),
                 width = 11, 
@@ -346,12 +346,7 @@ GenerateReads <- R6::R6Class(
                 replace = TRUE,
                 prob = kmer.from.seq$prob
             )
-            bp.end.pos <- sample(
-                x = nrow(kmer.from.seq),
-                size = len.sampling, 
-                replace = TRUE,
-                prob = kmer.from.seq$prob
-            )
+            bp.start.pos <- bp.start.pos[(bp.start.pos+private$read_len-1) <= length(self$genome_seq)]
 
             # plot breakage probability over the full genome sequence
             mytitle <- paste0(
@@ -361,7 +356,8 @@ GenerateReads <- R6::R6Class(
             pdf(
                 file = paste0(
                     "../figures/UltrasonicatedGenome_kmer-", self$kmer, 
-                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
                     "_ReadLen-", private$read_len,
                     ".pdf"
                 ),
@@ -369,7 +365,7 @@ GenerateReads <- R6::R6Class(
                 height = 8
             )
             hist(
-                c(bp.start.pos, bp.end.pos), 
+                bp.start.pos, 
                 breaks = 300,
                 main = "",
                 xlab = "Genomic sequence position",
@@ -378,51 +374,11 @@ GenerateReads <- R6::R6Class(
             mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
             mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
             plot.saved <- dev.off()
-
-            # sonicated fragments
-            mat <- matrix(c(bp.start.pos, bp.end.pos), nrow = 2, byrow = TRUE)
-            mat <- apply(mat, 2, sort)
-            mat.ir <- IRanges(start = mat[1,], end = mat[2,])
-
-            # size selection 
-            mat.ir <- mat.ir[which(
-                (width(mat.ir) != 0) &
-                (width(mat.ir) >= private$read_len)
-            ), ]
 
             # synthetic sequencing by synthesis for paired-end sequencing
             # read two information will be used for the breakage scoring and 
             # overall evaluation of the de novo assembly results
-            read.one <- IRanges(start = start(mat.ir), width = private$read_len)
-            read.one <- read.one[which(end(read.one) <= length(self$genome_seq)), ]
-            read.two <- IRanges(
-                start = end(mat.ir)-private$read_len, 
-                width = private$read_len
-            )
-            read.two <- read.two[which(end(read.two) <= length(self$genome_seq)), ]
-
-            # plot the starting positions that are sampled after synthetic sequencing by synthesis
-            mytitle <- "Start and end positions sampled after synthetic sequencing by synthesis"
-            pdf(
-                file = paste0(
-                    "../figures/StartEndPositionsOfReads_kmer-", self$kmer, 
-                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
-                    ".pdf"
-                ),
-                width = 11, 
-                height = 8
-            )
-            hist(
-                c(start(read.one), end(read.two)),
-                breaks = 300,
-                main = "",
-                xlab = "Genomic sequence position",
-                xlim = c(0, private$seq_len)
-            )
-            mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
-            mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
-            plot.saved <- dev.off()
+            read.one <- IRanges(start = bp.start.pos, width = private$read_len)
  
             # extract nucleotide bases
             bio.ref.seq <- Biostrings::DNAStringSet(
@@ -434,14 +390,6 @@ GenerateReads <- R6::R6Class(
                 first = start(read.one),
                 last = end(read.one)
             )
-            read.two <- substring(
-                text = bio.ref.seq,
-                first = start(read.two),
-                last = end(read.two)
-            )
-            read.two <- paste(Biostrings::reverseComplement(
-                Biostrings::DNAStringSet(read.two)
-            ))
             read.length <- nchar(read.one)
             self$dbg_summary$coverage <- signif(
                 (length(read.one)*private$read_len)/length(self$genome_seq),
@@ -456,20 +404,20 @@ GenerateReads <- R6::R6Class(
 
             # save generated reads into text file for use in genome assembly
             dir.create(
-                path = "../data/reads/",
+                path = paste0("../data/reads/exp_", private$ind, "/"),
                 showWarnings = FALSE,
                 recursive = TRUE
             )
-            file.reads <- file("../data/reads/read_one.txt")
+            file.reads <- file(paste0(
+                "../data/reads/exp_", private$ind, 
+                "/read_1",
+                "_SeqLen-", private$seq_len, 
+                "_SeqSeed-", private$seed,
+                "_ReadLen-", private$read_len,
+                ".txt"
+            ))
             writeLines(
                 read.one,
-                file.reads, 
-                sep = "\n"
-            )
-            close(file.reads)
-            file.reads <- file("../data/reads/read_two.txt")
-            writeLines(
-                read.two,
                 file.reads, 
                 sep = "\n"
             )
@@ -477,17 +425,17 @@ GenerateReads <- R6::R6Class(
 
             # fasta file
             read.one <- Biostrings::DNAStringSet(read.one)
-            read.two <- Biostrings::DNAStringSet(read.two)
             names(read.one) <- paste0("seq-", 1:length(read.one))
-            names(read.two) <- paste0("seq-", 1:length(read.two))
             Biostrings::writeXStringSet(
                 x = read.one, 
-                filepath = "../data/reads/read_1.fasta", 
-                format = "fasta"
-            )
-            Biostrings::writeXStringSet(
-                x = read.two, 
-                filepath = "../data/reads/read_2.fasta", 
+                filepath = paste0(
+                    "../data/reads/exp_", private$ind, 
+                    "/read_1",
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    ".fasta"
+                ),
                 format = "fasta"
             )
 
@@ -496,7 +444,14 @@ GenerateReads <- R6::R6Class(
             names(genome.seq) <- "seq-1"
             Biostrings::writeXStringSet(
                 x = genome.seq, 
-                filepath = "../data/reads/ref.fasta", 
+                filepath = paste0(
+                    "../data/reads/exp_", private$ind, 
+                    "/ref",
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
+                    "_ReadLen-", private$read_len,
+                    ".txt"
+                ),
                 format = "fasta"
             )
 
