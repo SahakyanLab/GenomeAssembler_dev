@@ -578,27 +578,41 @@ DeNovoAssembler <- R6::R6Class(
             # as RDS file
             self$dbg_summary$genome_seq <- paste(self$genome_seq, collapse = "")
 
+            file.reads <- file(paste0(
+                "../data/reads/exp_", private$ind, 
+                "/read_1",
+                "_SeqLen-", private$seq_len, 
+                "_SeqSeed-", private$seed,
+                "_ReadLen-", private$read_len,
+                ".txt"
+            ))
+
             dir.create(
-                path = "../data/results",
+                path = paste0("../data/results/exp_", private$ind, "/"),
                 showWarnings = FALSE,
                 recursive = TRUE
             )
             saveRDS(
                 self$dbg_summary,
                 file = paste0(
-                    "../data/results/AssemblyStats_kmer-", self$kmer, 
-                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                    "../data/results/exp_", private$ind, 
+                    "/AssemblyStats",
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
                     "_ReadLen-", private$read_len,
+                    "_kmer-", self$kmer, 
                     ".RData"
                 )
             )
-
             fwrite(
                 self$results,
                 file = paste0(
-                    "../data/results/SolutionsTable_kmer-", self$kmer, 
-                    "_SeqLen-", length(self$genome_seq), "_SeqSeed-", private$seed,
+                    "../data/results/exp_", private$ind, 
+                    "/SolutionsTable",
+                    "_SeqLen-", private$seq_len, 
+                    "_SeqSeed-", private$seed,
                     "_ReadLen-", private$read_len,
+                    "_kmer-", self$kmer, 
                     ".csv"
                 )
             )
@@ -626,13 +640,14 @@ DeNovoAssembler <- R6::R6Class(
                 "Experiment: ", private$ind, ". ",
                 "Nr. of solutions: ", nrow(self$results)
             )
-
             pdf(
                 file = paste0(
-                    "../figures/Breakscore-vs-Levdist_kmer-", self$kmer, 
+                    "../figures/exp_", private$ind, 
+                    "/Breakscore-vs-Levdist",
                     "_SeqLen-", private$seq_len, 
                     "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
+                    "_ReadLen-", private$read_len,                    
+                    "_kmer-", self$kmer, 
                     "_exp-", private$ind,
                     ".pdf"
                 ),

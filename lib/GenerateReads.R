@@ -312,14 +312,17 @@ GenerateReads <- R6::R6Class(
                 "Sequence set.seed: ", private$seed
             )
             dir.create(
-                path = "../figures/",
-                showWarnings = FALSE
+                path = paste0("../figures/exp_", private$ind, "/"),
+                showWarnings = FALSE,
+                recursive = TRUE
             )
             pdf(
                 file = paste0(
-                    "../figures/BreakProb-vs-GenomeSeq_kmer-", self$kmer, 
+                    "../figures/exp_", private$ind,
+                    "/BreakProb-vs-GenomeSeq", 
                     "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
+                    "_SeqSeed-", private$seed,                    
+                    "_kmer-", self$kmer, 
                     ".pdf"
                 ),
                 width = 11, 
@@ -355,10 +358,11 @@ GenerateReads <- R6::R6Class(
             )
             pdf(
                 file = paste0(
-                    "../figures/UltrasonicatedGenome_kmer-", self$kmer, 
+                    "../figures/exp_", private$ind,
+                    "/UltrasonicatedGenome", 
                     "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
+                    "_SeqSeed-", private$seed,                    
+                    "_kmer-", self$kmer, 
                     ".pdf"
                 ),
                 width = 11, 
