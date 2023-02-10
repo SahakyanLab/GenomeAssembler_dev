@@ -9,7 +9,7 @@ using namespace Rcpp;
 using namespace std;
 
 // [[Rcpp::export]]  
-Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int seed){
+Rcpp::List get_contigs(const std::vector<std::string> read_kmers, const int dbg_kmer, const int seed){
     // init prefix and suffix vectors
     std::vector<std::string> prefix(read_kmers.size());
     std::vector<std::string> suffix(read_kmers.size());
@@ -65,25 +65,25 @@ Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int se
     }
 
     // update balance count per node
-    for(auto const& pair : dict){
-        std::string node = pair.first;
-        auto edges = pair.second;
+    // & calls by reference = any changes made, will change its reference
+    for(const auto &pair : dict){
+        const std::string &node = pair.first;
+        const std::vector<std::string> &edges = pair.second;
 
         // out-degree
         balanced_count[node].second += edges.size(); 
 
         // in-degree
-        for(auto const& edge : edges){
-            std::string current_edge = edge;
+        for(const auto &edge : edges){
+            const std::string &current_edge = edge;
             balanced_count[current_edge].first += 1;
         }
     }
 
     // find branching points
     std::vector<std::string> keys_with_balanced_count;
-    for(auto const& pair : balanced_count){
+    for(const auto &pair : balanced_count){
         if(pair.second.first != 1 || pair.second.second != 1){
-
             // keep branching point only if it's a node
             if(dict.count(pair.first)){
                 keys_with_balanced_count.push_back(pair.first);
@@ -93,9 +93,9 @@ Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int se
 
     // get contigs
     std::vector<std::string> contigs;
-    for(auto const& node : keys_with_balanced_count){
-        std::vector<std::string> edges = dict[node];
-        for(auto const& edge : edges){
+    for(const auto &node : keys_with_balanced_count){
+        const std::vector<std::string> edges = dict[node];
+        for(const auto &edge : edges){
             std::string current_node = edge;
             std::string path = node;       
 
@@ -119,7 +119,7 @@ Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int se
 
     // Randomly shuffle the order of contigs for assembly
     std::mt19937 engine(seed);
-    Rcpp::List contig_matrix(10000);
+    Rcpp::List contig_matrix(10);
     for(int i = 0; i < contig_matrix.size(); i++){
         std::vector<std::string> contigs_copy = unique_contigs;
         std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
@@ -129,8 +129,9 @@ Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int se
 }
 
 // [[Rcpp::export]]
-std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, int dbg_kmer){
-    // Loop over all the contig subsets and return assemblies in-place
+std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int dbg_kmer){
+    // Loop over all the contig subsets and return assemblies in-place.
+    // Note. Below code looks worse than it appears. In reality, it executes fast
     for(int contig_ind = 0; contig_ind < contig_matrix.size(); contig_ind++){
         Rcpp::StringVector contigs = contig_matrix[contig_ind];
         for(int kmer = (dbg_kmer-1); kmer > 0; kmer--){
@@ -185,4 +186,23 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, int dbg_kmer
         Rcpp::unique(r_flat_contig_matrix)
     );
     return contig_matrix_set;
+}
+
+// [[Rcpp::export]]
+void calc_breakscore(std::string path, std::vector<std::string> sequencing_reads, const int kmer){
+    for(const auto &read : sequencing_reads){
+        // find exact match
+        std::size_t pos = path.find(read);
+
+        if(pos != std::string::npos){
+            // get start pos of broken kmer
+            // take max of start pos of kmer or start of path
+            int start_pos_ind = std::max(0, (int)pos-(kmer/2-1));
+
+            // extract broken kmer
+            std::string broken_kmer = path.substr(start_pos_ind, kmer-1);
+
+            Rcout << broken_kmer << "\n";
+        }
+    }
 }
