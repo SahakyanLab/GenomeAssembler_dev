@@ -189,7 +189,7 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int db
 }
 
 // [[Rcpp::export]]
-void calc_breakscore(std::string path, std::vector<std::string> sequencing_reads, const int kmer){
+void calc_breakscore(std::string path, std::vector<std::string> sequencing_reads, const int kmer, Rcpp::DataFrame bp_table){
     for(const auto &read : sequencing_reads){
         // find exact match
         std::size_t pos = path.find(read);
@@ -202,7 +202,11 @@ void calc_breakscore(std::string path, std::vector<std::string> sequencing_reads
             // extract broken kmer
             std::string broken_kmer = path.substr(start_pos_ind, kmer-1);
 
-            Rcout << broken_kmer << "\n";
+            // get corresponding probability from map
+            // TODO: access bp_table$prob based on bp_table$kmer index of broken_kmer.
+            double prob = bp_table[broken_kmer];
+
+            Rcout << prob << "\n";
         }
     }
 }
