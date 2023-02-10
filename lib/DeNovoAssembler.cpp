@@ -3,40 +3,33 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <random>
 
 using namespace Rcpp;
 using namespace std;
 
 // [[Rcpp::export]]  
-Rcpp::List get_prefix_and_suffix(Rcpp::CharacterVector read_kmers, int dbg_kmer){
+Rcpp::List get_contigs(std::vector<std::string> read_kmers, int dbg_kmer, int seed){
     // init prefix and suffix vectors
-    Rcpp::CharacterVector prefix(read_kmers.size());
-    Rcpp::CharacterVector suffix(read_kmers.size());
+    std::vector<std::string> prefix(read_kmers.size());
+    std::vector<std::string> suffix(read_kmers.size());
 
     for(int i = 0; i < read_kmers.size(); i++){
         // extract single kmer from string vector
-        std::string read_kmer = Rcpp::as<std::string>(read_kmers[i]);
+        std::string read_kmer = read_kmers[i];
 
         // extract prefix and suffix of kmer
         prefix[i] = read_kmer.substr(0, dbg_kmer-1);
         suffix[i] = read_kmer.substr(1, dbg_kmer);
     }
-    return Rcpp::List::create(Rcpp::Named("prefix") = prefix,
-                              Rcpp::Named("suffix") = suffix); 
-}
-
-// [[Rcpp::export]]  
-Rcpp::CharacterVector get_contigs(const Rcpp::List prefix_suffix){
-    Rcpp::CharacterVector prefix = prefix_suffix["prefix"];
-    Rcpp::CharacterVector suffix = prefix_suffix["suffix"];
 
     // init hash map of prefix and suffix
     std::map<std::string, std::vector<std::string>> dict;
 
     // fill hash map with pre- and suffixes
     for(int i = 0; i < prefix.size(); i++){
-        std::string key = Rcpp::as<std::string>(prefix[i]);
-        std::string value = Rcpp::as<std::string>(suffix[i]);
+        std::string key = prefix[i];
+        std::string value = suffix[i];
 
         if(dict[key].empty()){
             // creates new entry in map if previously not existing
@@ -55,8 +48,14 @@ Rcpp::CharacterVector get_contigs(const Rcpp::List prefix_suffix){
     std::map<std::string, std::pair<int, int>> balanced_count;
 
     // get unique prefix and suffix
-    std::vector<std::string> unique_vals = Rcpp::as<std::vector<std::string>>(Rcpp::unique(prefix));
-    std::vector<std::string> unique_suffix = Rcpp::as<std::vector<std::string>>(Rcpp::unique(suffix));
+    Rcpp::CharacterVector temp_prefix = Rcpp::wrap(prefix);
+    Rcpp::CharacterVector temp_suffix = Rcpp::wrap(suffix);
+    std::vector<std::string> unique_vals = Rcpp::as<std::vector<std::string>>(
+        Rcpp::unique(temp_prefix)
+    );
+    std::vector<std::string> unique_suffix = Rcpp::as<std::vector<std::string>>(
+        Rcpp::unique(temp_suffix)
+    );
     unique_vals.insert(unique_vals.end(), unique_suffix.begin(), unique_suffix.end());
 
     // init balanced counts to zeros
@@ -114,14 +113,24 @@ Rcpp::CharacterVector get_contigs(const Rcpp::List prefix_suffix){
 
     // To use Rcpp::unique, need to convert to Rcpp Vector types
     Rcpp::CharacterVector r_contigs = Rcpp::wrap(contigs);
-    Rcpp::CharacterVector unique_contigs = Rcpp::unique(r_contigs);
-    return unique_contigs;
+    std::vector<std::string> unique_contigs = Rcpp::as<std::vector<std::string>>(
+        Rcpp::unique(r_contigs)
+    );
+
+    // Randomly shuffle the order of contigs for assembly
+    std::mt19937 engine(seed);
+    Rcpp::List contig_matrix(10000);
+    for(int i = 0; i < contig_matrix.size(); i++){
+        std::vector<std::string> contigs_copy = unique_contigs;
+        std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
+        contig_matrix[i] = contigs_copy;
+    }
+    return contig_matrix;
 }
 
 // [[Rcpp::export]]
-Rcpp::List assemble_contigs(List contig_matrix, int dbg_kmer){
-
-    // Loop over all the contig subsets
+std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, int dbg_kmer){
+    // Loop over all the contig subsets and return assemblies in-place
     for(int contig_ind = 0; contig_ind < contig_matrix.size(); contig_ind++){
         Rcpp::StringVector contigs = contig_matrix[contig_ind];
         for(int kmer = (dbg_kmer-1); kmer > 0; kmer--){
@@ -131,13 +140,19 @@ Rcpp::List assemble_contigs(List contig_matrix, int dbg_kmer){
                 for(int i = 0; i < contigs.size(); i++){
                     if (contigs[i] == "") continue;
                     for(int j = contigs.size()-1; j >= 0; j--){
-                        if (contigs[i] != contigs[j]) {
+                        if(contigs[i] != contigs[j]){
                             std::string str_contig_i = Rcpp::as<std::string>(contigs[i]);
                             std::string str_contig_j = Rcpp::as<std::string>(contigs[j]);
-                            std::string suffix = str_contig_i.substr(contigs[i].size()-kmer, contigs[i].size());
+                            std::string suffix = str_contig_i.substr(
+                                contigs[i].size()-kmer, 
+                                contigs[i].size()
+                            );
                             std::string prefix = str_contig_j.substr(0, kmer);
-                            if (suffix == prefix) {
-                                std::string no_prefix = str_contig_j.substr(kmer, contigs[j].size());
+                            if(suffix == prefix){
+                                std::string no_prefix = str_contig_j.substr(
+                                    kmer, 
+                                    contigs[j].size()
+                                );
                                 contigs[i] = str_contig_i.append(no_prefix);
                                 contigs[j] = "";
                             }
@@ -145,7 +160,7 @@ Rcpp::List assemble_contigs(List contig_matrix, int dbg_kmer){
                     }
                 }
                 for(int i = contigs.size()-1; i >= 0; i--){
-                    if (contigs[i] == "") {
+                    if(contigs[i] == ""){
                         contigs.erase(i);
                     }
                 }
@@ -154,5 +169,20 @@ Rcpp::List assemble_contigs(List contig_matrix, int dbg_kmer){
         }
         contig_matrix[contig_ind] = contigs;
     }
-    return(contig_matrix);
+
+    // flatten list into character vector and discard duplicates
+    std::vector<std::string> flat_contig_matrix;
+    for(int i = 0; i < contig_matrix.size(); i++){
+        std::vector<std::string> current_contigs = contig_matrix[i];
+        for(int j = 0; j < current_contigs.size(); j++){
+            flat_contig_matrix.push_back(current_contigs[j]);
+        }
+    }
+
+    // Discard duplicates
+    Rcpp::CharacterVector r_flat_contig_matrix = Rcpp::wrap(flat_contig_matrix);
+    std::vector<std::string> contig_matrix_set = Rcpp::as<std::vector<std::string>>(
+        Rcpp::unique(r_flat_contig_matrix)
+    );
+    return contig_matrix_set;
 }
