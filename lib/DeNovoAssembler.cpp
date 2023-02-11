@@ -182,7 +182,7 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
 
     // Randomly shuffle the order of contigs for assembly
     std::mt19937 engine(seed);
-    Rcpp::List contig_matrix(50000);
+    Rcpp::List contig_matrix(100000);
     for(int i = 0; i < contig_matrix.size(); i++){
         std::vector<std::string> contigs_copy = unique_contigs;
         std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
@@ -347,9 +347,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
     std::iota(idx.begin(), idx.end(), 0); 
 
     // sort indices based on comparing values in break_score_vector
-    // using stable_sort to avoid unnecessasry index re-orderings
-    // when break_score_vector constiants elements of equal values
-    std::stable_sort(idx.begin(), idx.end(), 
+    std::sort(idx.begin(), idx.end(), 
          [&break_score_vector](size_t idx_1, size_t idx_2){ 
             return break_score_vector[idx_1] > break_score_vector[idx_2]; 
     });
