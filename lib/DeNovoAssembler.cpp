@@ -188,25 +188,74 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int db
     return contig_matrix_set;
 }
 
-// [[Rcpp::export]]
-void calc_breakscore(std::string path, std::vector<std::string> sequencing_reads, const int kmer, Rcpp::DataFrame bp_table){
-    for(const auto &read : sequencing_reads){
-        // find exact match
-        std::size_t pos = path.find(read);
-
-        if(pos != std::string::npos){
-            // get start pos of broken kmer
-            // take max of start pos of kmer or start of path
-            int start_pos_ind = std::max(0, (int)pos-(kmer/2-1));
-
-            // extract broken kmer
-            std::string broken_kmer = path.substr(start_pos_ind, kmer-1);
-
-            // get corresponding probability from map
-            // TODO: access bp_table$prob based on bp_table$kmer index of broken_kmer.
-            double prob = bp_table[broken_kmer];
-
-            Rcout << prob << "\n";
-        }
+/*
+    Get reverse complement of a DNA string
+*/
+std::string reverse_complement(const std::string &sequence) {
+    // reverse complement map
+    std::unordered_map<char, char> complement = {
+        {'A', 'T'}, 
+        {'C', 'G'}, 
+        {'G', 'C'}, 
+        {'T', 'A'}
+    };
+    std::string reverse_seq(sequence.rbegin(), sequence.rend());
+    for(char &c : reverse_seq){
+        c = complement[c];
     }
+    return reverse_seq;
+}
+
+// [[Rcpp::export]]
+Rcpp::List calc_breakscore(std::vector<std::string> path, std::vector<std::string> sequencing_reads, const int kmer, Rcpp::DataFrame bp_table){
+    // extract columns from Rcpp::DataFrame
+    std::vector<std::string> bp_kmer = Rcpp::as<std::vector<std::string>>(bp_table["kmer"]);
+    std::vector<double> bp_prob = Rcpp::as<std::vector<double>>(bp_table["prob"]);
+    
+    // hash map of kmers and probability values
+    std::map<std::string, double> bp_matrix;
+    for(int i = 0; i < bp_kmer.size(); i++){
+        bp_matrix[bp_kmer[i]] = bp_prob[i];
+    }
+
+    // init break score vector
+    std::vector<double> break_score_vector(path.size());
+
+    for(int i = 0; i < path.size(); i++){
+        // init break_score
+        double break_score = 0;
+        std::string current_path = path[i];
+
+        for(const auto &read : sequencing_reads){
+            // find exact match
+            std::size_t pos = current_path.find(read);
+
+            if(pos != std::string::npos){
+                // get start pos of broken kmer
+                // take max of start pos of kmer or start of path
+                int start_pos_ind = std::max(0, (int)pos-(kmer/2));
+
+                // extract broken kmer
+                std::string broken_kmer = current_path.substr(start_pos_ind, kmer);
+
+                // get corresponding probability from hash map
+                double prob = bp_matrix[broken_kmer];
+
+                // get reverse complement kmer if no match found
+                if(prob == 0){
+                    std::string rev_comp_kmer = reverse_complement(broken_kmer);
+                    prob = bp_matrix[rev_comp_kmer];
+                }
+
+                // update probability score
+                break_score += prob;
+            }
+        }
+        break_score_vector[i] = break_score;
+    }
+
+    return Rcpp::List::create(
+        Rcpp::Named("sequence") = path,
+        Rcpp::Named("bp_score") = break_score_vector
+    );
 }
