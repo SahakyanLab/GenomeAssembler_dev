@@ -1,15 +1,61 @@
+// Enable C++11 via this plugin (Rcpp 0.10.3 or later)
+// [[Rcpp::plugins("cpp11")]]
 #include <Rcpp.h>
 #include <map>
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <numeric>
 #include <random>
+#include <cstdio>
+
+// edlib dependency
+#include "../lib/edlib/edlib.h"
 
 using namespace Rcpp;
 using namespace std;
 
+/*
+    Get reverse complement of a DNA string
+*/
+std::string reverse_complement(const std::string &sequence) {
+    // reverse complement map
+    std::unordered_map<char, char> complement = {
+        {'A', 'T'}, 
+        {'C', 'G'}, 
+        {'G', 'C'}, 
+        {'T', 'A'}
+    };
+    std::string reverse_seq(sequence.rbegin(), sequence.rend());
+    for(char &c : reverse_seq){
+        c = complement[c];
+    }
+    return reverse_seq;
+}
+
+/*
+    Fast levenshtein distance calculation with edlib 
+*/
+int calc_levenshtein(const std::string query, const std::string target){
+  // edlib function
+  EdlibAlignResult result = edlibAlign(
+    query.c_str(), query.length(), 
+    target.c_str(), target.length(), 
+    edlibNewAlignConfig(-1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE, NULL, 0)
+  );
+  
+  // return edit distance
+  if(result.status == EDLIB_STATUS_OK){
+    return result.editDistance;
+  }
+
+  return 0;
+}
+
 // [[Rcpp::export]]  
-Rcpp::List get_contigs(const std::vector<std::string> read_kmers, const int dbg_kmer, const int seed){
+Rcpp::List get_contigs(const std::vector<std::string> read_kmers, 
+                       const int dbg_kmer, 
+                       const int seed){
     // init prefix and suffix vectors
     std::vector<std::string> prefix(read_kmers.size());
     std::vector<std::string> suffix(read_kmers.size());
@@ -119,7 +165,7 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers, const int dbg_
 
     // Randomly shuffle the order of contigs for assembly
     std::mt19937 engine(seed);
-    Rcpp::List contig_matrix(10);
+    Rcpp::List contig_matrix(50000);
     for(int i = 0; i < contig_matrix.size(); i++){
         std::vector<std::string> contigs_copy = unique_contigs;
         std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
@@ -185,33 +231,35 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int db
     std::vector<std::string> contig_matrix_set = Rcpp::as<std::vector<std::string>>(
         Rcpp::unique(r_flat_contig_matrix)
     );
-    return contig_matrix_set;
-}
 
-/*
-    Get reverse complement of a DNA string
-*/
-std::string reverse_complement(const std::string &sequence) {
-    // reverse complement map
-    std::unordered_map<char, char> complement = {
-        {'A', 'T'}, 
-        {'C', 'G'}, 
-        {'G', 'C'}, 
-        {'T', 'A'}
-    };
-    std::string reverse_seq(sequence.rbegin(), sequence.rend());
-    for(char &c : reverse_seq){
-        c = complement[c];
-    }
-    return reverse_seq;
+    // sort vector in descending order by length
+    std::sort(
+        contig_matrix_set.begin(),
+        contig_matrix_set.end(),
+        [](const std::string &seq_a, const std::string &seq_b) -> bool {
+            return seq_a.length() > seq_b.length();
+    });
+
+    // Retain top 5% of assembled solution by length
+    int top_5_percent = contig_matrix_set.size()*0.05;
+    std::vector<std::string> top_5_percent_matrix(
+        contig_matrix_set.begin(),
+        contig_matrix_set.begin()+top_5_percent
+    );
+
+    return top_5_percent_matrix;
 }
 
 // [[Rcpp::export]]
-Rcpp::List calc_breakscore(std::vector<std::string> path, std::vector<std::string> sequencing_reads, const int kmer, Rcpp::DataFrame bp_table){
+Rcpp::List calc_breakscore(std::vector<std::string> path, 
+                           std::vector<std::string> sequencing_reads, 
+                           std::string true_solution,
+                           const int kmer, 
+                           Rcpp::DataFrame bp_table){
     // extract columns from Rcpp::DataFrame
     std::vector<std::string> bp_kmer = Rcpp::as<std::vector<std::string>>(bp_table["kmer"]);
     std::vector<double> bp_prob = Rcpp::as<std::vector<double>>(bp_table["prob"]);
-    
+
     // hash map of kmers and probability values
     std::map<std::string, double> bp_matrix;
     for(int i = 0; i < bp_kmer.size(); i++){
@@ -220,15 +268,16 @@ Rcpp::List calc_breakscore(std::vector<std::string> path, std::vector<std::strin
 
     // init break score vector
     std::vector<double> break_score_vector(path.size());
+    std::vector<double> nr_of_breaks_vector(path.size());
 
     for(int i = 0; i < path.size(); i++){
         // init break_score
         double break_score = 0;
-        std::string current_path = path[i];
+        int nr_of_breaks = 0;
 
         for(const auto &read : sequencing_reads){
             // find exact match
-            std::size_t pos = current_path.find(read);
+            std::size_t pos = path[i].find(read);
 
             if(pos != std::string::npos){
                 // get start pos of broken kmer
@@ -236,7 +285,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path, std::vector<std::strin
                 int start_pos_ind = std::max(0, (int)pos-(kmer/2));
 
                 // extract broken kmer
-                std::string broken_kmer = current_path.substr(start_pos_ind, kmer);
+                std::string broken_kmer = path[i].substr(start_pos_ind, kmer);
 
                 // get corresponding probability from hash map
                 double prob = bp_matrix[broken_kmer];
@@ -249,13 +298,53 @@ Rcpp::List calc_breakscore(std::vector<std::string> path, std::vector<std::strin
 
                 // update probability score
                 break_score += prob;
+
+                // update counts of kmer break
+                if(prob != 0){
+                    nr_of_breaks += 1;
+                }
             }
         }
         break_score_vector[i] = break_score;
+        nr_of_breaks_vector[i] = nr_of_breaks;
+    }
+
+    // sort the break_score_vector in descending order
+    // initialise original index locations
+    std::vector<size_t> idx(break_score_vector.size());
+    std::iota(idx.begin(), idx.end(), 0); 
+
+    // sort indices based on comparing values in break_score_vector
+    // using stable_sort to avoid unnecessasry index re-orderings
+    // when break_score_vector constiants elements of equal values
+    std::stable_sort(idx.begin(), idx.end(), 
+         [&break_score_vector](size_t idx_1, size_t idx_2){ 
+            return break_score_vector[idx_1] > break_score_vector[idx_2]; 
+    });
+
+    // reorder elements
+    std::vector<double> sorted_break_score(idx.size());
+    std::vector<std::string> sorted_path(idx.size());
+    std::vector<int> path_len(idx.size());
+    std::vector<int> sorted_nr_of_breaks_vector(idx.size());
+    std::vector<int> lev_dist_vs_true(idx.size());
+
+    for(int i = 0; i < idx.size(); i++){
+        sorted_break_score[i] = break_score_vector[idx[i]];
+        sorted_path[i] = path[idx[i]];
+        path_len[i] = path[idx[i]].length();
+        sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
+
+        // calculate levenshtein distance of assembled vs true solution
+        int lev_dist = calc_levenshtein(path[idx[i]], true_solution);
+        lev_dist_vs_true[i] = lev_dist;
     }
 
     return Rcpp::List::create(
-        Rcpp::Named("sequence") = path,
-        Rcpp::Named("bp_score") = break_score_vector
+        Rcpp::Named("sequence") = sorted_path,
+        Rcpp::Named("sequence_len") = path_len,
+        Rcpp::Named("bp_score") = sorted_break_score,
+        Rcpp::Named("kmer_breaks") = sorted_nr_of_breaks_vector,
+        Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true
     );
 }
