@@ -15,8 +15,10 @@
 using namespace Rcpp;
 using namespace std;
 
-/*
-    Get reverse complement of a DNA string
+/**
+ * Get reverse complement of a DNA string.
+ * @param sequence kmer broken after aligning read with de novo sequence/
+ * @return reverse_seq reverse complement of sequence.
 */
 std::string reverse_complement(const std::string &sequence) {
     // reverse complement map
@@ -33,8 +35,11 @@ std::string reverse_complement(const std::string &sequence) {
     return reverse_seq;
 }
 
-/*
-    Fast levenshtein distance calculation with edlib 
+/**
+ * Fast levenshtein distance calculation with edlib.
+ * @param query de novo sequence.
+ * @param target true solution.
+ * @return levenshtein distance between query and target.
 */
 int calc_levenshtein(const std::string query, const std::string target){
   // edlib function
@@ -52,7 +57,19 @@ int calc_levenshtein(const std::string query, const std::string target){
   return 0;
 }
 
-// [[Rcpp::export]]  
+/**
+ * Generate contigs from sonicated sequencing reads. Logic flow is:
+    * 1) Generate prefix and suffix.
+    * 2) Find balanced counts for in- and out-degrees per node.
+    * 3) Find branching points.
+    * 4) Generate contigs.
+    * 5) Shuffle order of contigs and assemble each run.
+ * @param read_kmer kmers generated from sequencing reads.
+ * @param dbg_kmer size of kmer per de bruijn graph node.
+ * @param seed set seed for reproducible results.
+ * @return contig_matrix list of shuffled contigs.
+*/
+// [[Rcpp::export]] 
 Rcpp::List get_contigs(const std::vector<std::string> read_kmers, 
                        const int dbg_kmer, 
                        const int seed){
@@ -174,6 +191,12 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
     return contig_matrix;
 }
 
+/**
+ * Assemble each batch of contigs through brute force alignment.
+ * @param contig_matrix list of shuffled contigs.
+ * @param dbg_kmer size of kmer per de bruijn graph node.
+ * @return top_5_percent_matrix top 5% of assembled solutions by length.
+*/
 // [[Rcpp::export]]
 std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int dbg_kmer){
     // Loop over all the contig subsets and return assemblies in-place.
@@ -250,6 +273,15 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int db
     return top_5_percent_matrix;
 }
 
+/**
+ * Calculate breakage score for each de novo assembled solutions.
+ * @param path top 5% of assembled solutions by length.
+ * @param sequencing_reads all sequencing reads from ultrasonication.
+ * @param true_solution the true solution for this experiment. 
+ * @param kmer size of k-meric break.
+ * @param bp_table table of kmer and associated breakage probabilities.
+ * @return List of de novo assembled solutions and various calculations performed.
+*/
 // [[Rcpp::export]]
 Rcpp::List calc_breakscore(std::vector<std::string> path, 
                            std::vector<std::string> sequencing_reads, 
