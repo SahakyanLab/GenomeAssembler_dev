@@ -4,76 +4,31 @@ suppressPackageStartupMessages(suppressWarnings(library(stringr)))
 suppressPackageStartupMessages(suppressWarnings(library(data.table)))
 suppressPackageStartupMessages(suppressWarnings(library(pbapply)))
 suppressPackageStartupMessages(suppressWarnings(library(Biostrings)))
+suppressPackageStartupMessages(suppressWarnings(library(plyranges)))
+suppressPackageStartupMessages(suppressWarnings(library(BSgenome.Hsapiens.UCSC.hg38.masked)))
 suppressPackageStartupMessages(suppressWarnings(library(Rcpp)))
-suppressPackageStartupMessages(suppressWarnings(library(foreach)))
-suppressPackageStartupMessages(suppressWarnings(library(doParallel)))
-suppressPackageStartupMessages(suppressWarnings(library(doRNG)))
 suppressPackageStartupMessages(suppressWarnings(library(ggplot2)))
 pbo <- pbapply::pboptions(type = "txt", char = "=")
 
 setwd("/Users/paddy/Documents/DPhil/github_repos/GenomeAssembler_dev/lib/")
 source("../lib/GenerateReads.R")
-source("../lib/DBG.R")
-sourceCpp("../lib/edlibFunction.cpp")
-assembler <- DBG$new(
-    seq_len = 100,
-    read_len = 10,
-    G_cont = 0.20,
-    C_cont = 0.15,
-    A_cont = 0.20,
+source("../lib/DeNovoAssembler.R")
+Rcpp::sourceCpp("../lib/DeNovoAssembler.cpp")
+
+seed = 1234
+seq_len = 1000
+i = 1
+
+set.seed(seed = seed)
+assembler <- DeNovoAssembler$new(
+    seq_len = seq_len,
+    read_len = 20,
     kmer = 8,
     dbg_kmer = 9,
-    seed = 1234,
-    ncpu = 4,
+    seed = seed,
     action = "ratio",
-    uniform_prob = FALSE
+    ind = i,
+    reads_only = FALSE
 )
-assembler$run_assembler()
-
-dim(assembler$results)
-head(assembler$results)
-assembler$results[1,]
-paste(assembler$genome_seq, collapse = "")
-# assembler$results[denovo.len > 1000]
-
-plot(assembler$results$lev.dist.vs.true, assembler$results$bp.score)
-
-# prev = copy(assembler$results)
-# prev[1,]
-
-private=self=NULL
-private$seq_len = 500
-private$read_len = 10
-private$G_cont = 0.20
-private$C_cont = 0.15
-private$A_cont = 0.20
-self$kmer = 8
-self$dbg_kmer = 9
-private$seed = 1234
-private$action = "ratio"
-private$uniform_prob = FALSE
-
-# seq_reads <- GenerateReads$new(
-#     seq_len = 1000,
-#     read_len = 10,
-#     G_cont = 0.25,
-#     C_cont = 0.10,
-#     A_cont = 0.25,
-#     kmer = 6,
-#     dbg_kmer = 11,
-#     seed = 1,
-#     action = "ratio",
-#     uniform_prob = FALSE
-# )
-# seq_reads$get_reads()
-# seq_reads$dbg_summary
-
-####################################################################################################################################################################################
-#' Assembly programmes
-#' @spades
-#' spades.py -s ../reads/toassemble.fasta --isolate -k 7 --threads 1 -o ./spades --only-assembler 
-
-#' @minia
-#' ../../tests/minia/bin/minia -in ../reads/toassemble.fasta -kmer-size 11 -no-bulge-removal -no-tip-removal -no-ec-removal -nb-cores 1 -nb-glue-partitions 200 -out minia/minia_assembly
-#' ../../tests/minia/bin/minia -in ../reads/toassemble.fasta -kmer-size 11 -nb-cores 1 -nb-glue-partitions 200 -out minia/minia_assembly
-####################################################################################################################################################################################
+assembler$sample_ref_genome()
+assembler$run_assembler(bins = 10)
