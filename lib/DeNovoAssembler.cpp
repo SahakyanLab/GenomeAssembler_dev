@@ -12,9 +12,6 @@
 // edlib dependency
 #include "../lib/edlib/edlib.h"
 
-using namespace Rcpp;
-using namespace std;
-
 /**
  * Get reverse complement of a DNA string.
  * @param sequence kmer broken after aligning read with de novo sequence/
@@ -292,20 +289,20 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
     std::vector<std::string> bp_kmer = Rcpp::as<std::vector<std::string>>(bp_table["kmer"]);
     std::vector<double> bp_prob = Rcpp::as<std::vector<double>>(bp_table["prob"]);
 
-    // hash map of kmers and probability values
-    std::map<std::string, double> bp_matrix;
+    // hash map of kmers, probability values and break counts
+    std::map<std::string, std::pair<double, int>> bp_matrix;
     for(int i = 0; i < bp_kmer.size(); i++){
-        bp_matrix[bp_kmer[i]] = bp_prob[i];
+        bp_matrix[bp_kmer[i]] = std::make_pair(bp_prob[i], 0);
     }
 
     // init break score vector
     std::vector<double> break_score_vector(path.size());
+    std::vector<double> norm_break_score_vector(path.size());
     std::vector<double> nr_of_breaks_vector(path.size());
 
     for(int i = 0; i < path.size(); i++){
-        // init break_score
-        double break_score = 0;
-        int nr_of_breaks = 0;
+        // init total count of kmer breaks
+        int total_breaks = 0;
 
         for(const auto &read : sequencing_reads){
             // find exact match
@@ -319,26 +316,45 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
                 // extract broken kmer
                 std::string broken_kmer = path[i].substr(start_pos_ind, kmer);
 
-                // get corresponding probability from hash map
-                double prob = bp_matrix[broken_kmer];
-
-                // get reverse complement kmer if no match found
-                if(prob == 0){
+                // Check if the broken kmer is in the bp_matrix
+                auto it = bp_matrix.find(broken_kmer);
+                if(it != bp_matrix.end()){
+                    std::get<1>(it->second)++;
+                    total_breaks += 1;
+                } else {
+                    // Get the reverse complement of the broken kmer
                     std::string rev_comp_kmer = reverse_complement(broken_kmer);
-                    prob = bp_matrix[rev_comp_kmer];
-                }
 
-                // update probability score
-                break_score += prob;
-
-                // update counts of kmer break
-                if(prob != 0){
-                    nr_of_breaks += 1;
+                    // Check if the reverse complement kmer is in the bp_matrix
+                    auto it_rev = bp_matrix.find(rev_comp_kmer);
+                    if(it_rev != bp_matrix.end()){
+                        std::get<1>(it_rev->second)++;
+                        total_breaks += 1;
+                    }
                 }
             }
         }
-        break_score_vector[i] = break_score;
-        nr_of_breaks_vector[i] = nr_of_breaks;
+
+        // Loop over the bp_matrix
+        for(auto it = bp_matrix.begin(); it != bp_matrix.end(); it++){
+            double prob = std::get<0>(it->second);
+            int break_count = std::get<1>(it->second);
+            double norm_break_count = (double)break_count/(double)total_breaks;
+
+            // Multiply non-zero break_scores with the probability values,
+            // add the result to the break_score_vector
+            if(break_count != 0){
+                double break_score = prob*break_count;
+                break_score_vector[i] += break_score;
+
+                double norm_break_score = prob*norm_break_count;
+                norm_break_score_vector[i] += norm_break_score;
+
+                // reset kmer break counter
+                it->second = std::make_pair(std::get<0>(it->second), 0);       
+            }
+        }
+        nr_of_breaks_vector[i] = total_breaks;
     }
 
     // sort the break_score_vector in descending order
@@ -354,6 +370,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
 
     // reorder elements
     std::vector<double> sorted_break_score(idx.size());
+    std::vector<double> sorted_norm_break_score(idx.size());
     std::vector<std::string> sorted_path(idx.size());
     std::vector<int> path_len(idx.size());
     std::vector<int> sorted_nr_of_breaks_vector(idx.size());
@@ -361,6 +378,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
 
     for(int i = 0; i < idx.size(); i++){
         sorted_break_score[i] = break_score_vector[idx[i]];
+        sorted_norm_break_score[i] = norm_break_score_vector[idx[i]];
         sorted_path[i] = path[idx[i]];
         path_len[i] = path[idx[i]].length();
         sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
@@ -374,6 +392,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
         Rcpp::Named("sequence") = sorted_path,
         Rcpp::Named("sequence_len") = path_len,
         Rcpp::Named("bp_score") = sorted_break_score,
+        Rcpp::Named("norm_bp_score") = sorted_norm_break_score,
         Rcpp::Named("kmer_breaks") = sorted_nr_of_breaks_vector,
         Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true
     );
