@@ -195,7 +195,8 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
  * @return top_5_percent_matrix top 5% of assembled solutions by length.
 */
 // [[Rcpp::export]]
-std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, const int dbg_kmer){
+std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, 
+                                          const int dbg_kmer){
     // Loop over all the contig subsets and return assemblies in-place.
     // Note. Below code looks worse than it appears. In reality, it executes fast
     for(int contig_ind = 0; contig_ind < contig_matrix.size(); contig_ind++){
@@ -298,6 +299,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
     // init break score vector
     std::vector<double> break_score_vector(path.size());
     std::vector<double> norm_break_score_vector(path.size());
+    std::vector<double> break_score_norm_by_len_vector(path.size());
     std::vector<double> nr_of_breaks_vector(path.size());
 
     for(int i = 0; i < path.size(); i++){
@@ -339,7 +341,6 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
         for(auto it = bp_matrix.begin(); it != bp_matrix.end(); it++){
             double prob = std::get<0>(it->second);
             int break_count = std::get<1>(it->second);
-            double norm_break_count = (double)break_count/(double)total_breaks;
 
             // Multiply non-zero break_scores with the probability values,
             // add the result to the break_score_vector
@@ -347,6 +348,8 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
                 double break_score = prob*break_count;
                 break_score_vector[i] += break_score;
 
+                // normalised break score by break counts
+                double norm_break_count = (double)break_count/(double)total_breaks;
                 double norm_break_score = prob*norm_break_count;
                 norm_break_score_vector[i] += norm_break_score;
 
@@ -355,6 +358,10 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
             }
         }
         nr_of_breaks_vector[i] = total_breaks;
+        
+        // normalised break score by sequence length
+        double norm_by_len = (double)break_score_vector[i]/(double)path[i].size();
+        break_score_norm_by_len_vector[i] = norm_by_len;
     }
 
     // sort the break_score_vector in descending order
@@ -370,7 +377,8 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
 
     // reorder elements
     std::vector<double> sorted_break_score(idx.size());
-    std::vector<double> sorted_norm_break_score(idx.size());
+    std::vector<double> sorted_bp_score_norm_by_break_freqs(idx.size());
+    std::vector<double> sorted_bp_score_norm_by_len(idx.size());
     std::vector<std::string> sorted_path(idx.size());
     std::vector<int> path_len(idx.size());
     std::vector<int> sorted_nr_of_breaks_vector(idx.size());
@@ -378,7 +386,8 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
 
     for(int i = 0; i < idx.size(); i++){
         sorted_break_score[i] = break_score_vector[idx[i]];
-        sorted_norm_break_score[i] = norm_break_score_vector[idx[i]];
+        sorted_bp_score_norm_by_break_freqs[i] = norm_break_score_vector[idx[i]];
+        sorted_bp_score_norm_by_len[i] = break_score_norm_by_len_vector[idx[i]];
         sorted_path[i] = path[idx[i]];
         path_len[i] = path[idx[i]].length();
         sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
@@ -392,7 +401,8 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
         Rcpp::Named("sequence") = sorted_path,
         Rcpp::Named("sequence_len") = path_len,
         Rcpp::Named("bp_score") = sorted_break_score,
-        Rcpp::Named("norm_bp_score") = sorted_norm_break_score,
+        Rcpp::Named("bp_score_norm_by_break_freqs") = sorted_bp_score_norm_by_break_freqs,
+        Rcpp::Named("bp_score_norm_by_len") = sorted_bp_score_norm_by_len,
         Rcpp::Named("kmer_breaks") = sorted_nr_of_breaks_vector,
         Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true
     );
