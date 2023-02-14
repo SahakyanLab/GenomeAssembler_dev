@@ -17,7 +17,7 @@
  * @param sequence kmer broken after aligning read with de novo sequence/
  * @return reverse_seq reverse complement of sequence.
 */
-std::string reverse_complement(const std::string &sequence) {
+std::string reverse_complement(const std::string &sequence){
     // reverse complement map
     std::unordered_map<char, char> complement = {
         {'A', 'T'}, 
@@ -200,7 +200,12 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix,
     // Loop over all the contig subsets and return assemblies in-place.
     // Note. Below code looks worse than it appears. In reality, it executes fast
     for(int contig_ind = 0; contig_ind < contig_matrix.size(); contig_ind++){
-        Rcpp::StringVector contigs = contig_matrix[contig_ind];
+        
+        // Convert to a vector of strings
+        std::vector<std::string> contigs = Rcpp::as<std::vector<std::string>>(
+            contig_matrix[contig_ind]
+        );
+
         for(int kmer = (dbg_kmer-1); kmer > 0; kmer--){
             bool len_changed = true;
             while(len_changed){
@@ -209,19 +214,19 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix,
                     if (contigs[i] == "") continue;
                     for(int j = contigs.size()-1; j >= 0; j--){
                         if(contigs[i] != contigs[j]){
-                            std::string str_contig_i = Rcpp::as<std::string>(contigs[i]);
-                            std::string str_contig_j = Rcpp::as<std::string>(contigs[j]);
-                            std::string suffix = str_contig_i.substr(
-                                contigs[i].size()-kmer, 
+                            std::string suffix = contigs[i].substr(
+                                contigs[i].size() - kmer, 
                                 contigs[i].size()
                             );
-                            std::string prefix = str_contig_j.substr(0, kmer);
+                            std::string prefix = contigs[j].substr(0, kmer);
+
+                            // If the suffix and prefix match, concatenate the two contigs
                             if(suffix == prefix){
-                                std::string no_prefix = str_contig_j.substr(
+                                std::string no_prefix = contigs[j].substr(
                                     kmer, 
                                     contigs[j].size()
                                 );
-                                contigs[i] = str_contig_i.append(no_prefix);
+                                contigs[i] = contigs[i].append(no_prefix);
                                 contigs[j] = "";
                             }
                         }
@@ -229,12 +234,13 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix,
                 }
                 for(int i = contigs.size()-1; i >= 0; i--){
                     if(contigs[i] == ""){
-                        contigs.erase(i);
+                        contigs.erase(contigs.begin()+i);
                     }
                 }
                 len_changed = temp != contigs.size();
             }
         }
+        // Update the contig subset with the assembled contigs
         contig_matrix[contig_ind] = contigs;
     }
 
@@ -360,7 +366,7 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
         nr_of_breaks_vector[i] = total_breaks;
         
         // normalised break score by sequence length
-        double norm_by_len = (double)break_score_vector[i]/(double)path[i].size();
+        double norm_by_len = (double)break_score_vector[i]/(double)path[i].length();
         break_score_norm_by_len_vector[i] = norm_by_len;
     }
 
