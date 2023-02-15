@@ -1,16 +1,18 @@
-// Enable C++11 via this plugin (Rcpp 0.10.3 or later)
-// [[Rcpp::plugins("cpp11")]]
+// [[Rcpp::plugins("cpp20")]]
 #include <Rcpp.h>
-#include <map>
-#include <string>
-#include <vector>
 #include <algorithm>
 #include <numeric>
 #include <random>
-#include <cstdio>
+
+// fast hash map
+#include <gtl/include/gtl/phmap.hpp>
+
+#include </usr/local/Cellar/libomp/15.0.7/include/omp.h>
 
 // edlib dependency
 #include "../lib/edlib/edlib.h"
+
+using namespace Rcpp;
 
 /**
  * Get reverse complement of a DNA string.
@@ -19,7 +21,7 @@
 */
 std::string reverse_complement(const std::string &sequence){
     // reverse complement map
-    std::unordered_map<char, char> complement = {
+    gtl::flat_hash_map<char, char> complement = {
         {'A', 'T'}, 
         {'C', 'G'}, 
         {'G', 'C'}, 
@@ -38,7 +40,7 @@ std::string reverse_complement(const std::string &sequence){
  * @param target true solution.
  * @return levenshtein distance between query and target.
 */
-int calc_levenshtein(const std::string query, const std::string target){
+int calc_levenshtein(const std::string &query, const std::string &target){
   // edlib function
   EdlibAlignResult result = edlibAlign(
     query.c_str(), query.length(), 
@@ -54,6 +56,17 @@ int calc_levenshtein(const std::string query, const std::string target){
   return 0;
 }
 
+template <typename T>
+void remove_duplicates(std::vector<T> &vec){
+    std::sort(vec.begin(), vec.end());
+    
+    vec.erase(std::unique(
+        vec.begin(), 
+        vec.end()), 
+        vec.end()
+    );
+}
+
 /**
  * Generate contigs from sonicated sequencing reads. Logic flow is:
     * 1) Generate prefix and suffix.
@@ -66,10 +79,10 @@ int calc_levenshtein(const std::string query, const std::string target){
  * @param seed set seed for reproducible results.
  * @return contig_matrix list of shuffled contigs.
 */
-// [[Rcpp::export]] 
-Rcpp::List get_contigs(const std::vector<std::string> read_kmers, 
-                       const int dbg_kmer, 
-                       const int seed){
+gtl::flat_hash_map<int, std::vector<std::string>> get_contigs(
+    const std::vector<std::string> &read_kmers, 
+    const int &dbg_kmer, 
+    const int &seed){
     // init prefix and suffix vectors
     std::vector<std::string> prefix(read_kmers.size());
     std::vector<std::string> suffix(read_kmers.size());
@@ -84,7 +97,7 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
     }
 
     // init hash map of prefix and suffix
-    std::map<std::string, std::vector<std::string>> dict;
+    gtl::flat_hash_map<std::string, std::vector<std::string>> dict;
 
     // fill hash map with pre- and suffixes
     for(int i = 0; i < prefix.size(); i++){
@@ -105,22 +118,22 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
     }
 
     // init hash map of balanced counts
-    std::map<std::string, std::pair<int, int>> balanced_count;
+    gtl::flat_hash_map<std::string, std::pair<int, int>> balanced_count;
 
     // get unique prefix and suffix
-    Rcpp::CharacterVector temp_prefix = Rcpp::wrap(prefix);
-    Rcpp::CharacterVector temp_suffix = Rcpp::wrap(suffix);
-    std::vector<std::string> unique_vals = Rcpp::as<std::vector<std::string>>(
-        Rcpp::unique(temp_prefix)
+    remove_duplicates(prefix);
+    remove_duplicates(suffix);
+    
+    // combine results 
+    prefix.insert(
+        prefix.end(), 
+        suffix.begin(), 
+        suffix.end()
     );
-    std::vector<std::string> unique_suffix = Rcpp::as<std::vector<std::string>>(
-        Rcpp::unique(temp_suffix)
-    );
-    unique_vals.insert(unique_vals.end(), unique_suffix.begin(), unique_suffix.end());
 
     // init balanced counts to zeros
-    for(int i = 0; i < unique_vals.size(); i++){
-        std::string key = unique_vals[i];
+    for(int i = 0; i < prefix.size(); i++){
+        std::string key = prefix[i];
         balanced_count[key] = std::make_pair(0,0);
     }
 
@@ -136,7 +149,7 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
         // in-degree
         for(const auto &edge : edges){
             const std::string &current_edge = edge;
-            balanced_count[current_edge].first += 1;
+            balanced_count[current_edge].first++;
         }
     }
 
@@ -171,20 +184,20 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
         }
     }
 
-    // To use Rcpp::unique, need to convert to Rcpp Vector types
-    Rcpp::CharacterVector r_contigs = Rcpp::wrap(contigs);
-    std::vector<std::string> unique_contigs = Rcpp::as<std::vector<std::string>>(
-        Rcpp::unique(r_contigs)
-    );
+    // remove duplicates
+    remove_duplicates(contigs);
 
     // Randomly shuffle the order of contigs for assembly
+    int matrix_size = 50000;
     std::mt19937 engine(seed);
-    Rcpp::List contig_matrix(100000);
-    for(int i = 0; i < contig_matrix.size(); i++){
-        std::vector<std::string> contigs_copy = unique_contigs;
+    gtl::flat_hash_map<int, std::vector<std::string>> contig_matrix;
+    contig_matrix.reserve(matrix_size);
+    for(int i = 0; i < matrix_size; i++){
+        std::vector<std::string> contigs_copy = contigs;
         std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
         contig_matrix[i] = contigs_copy;
     }
+
     return contig_matrix;
 }
 
@@ -195,16 +208,25 @@ Rcpp::List get_contigs(const std::vector<std::string> read_kmers,
  * @return top_5_percent_matrix top 5% of assembled solutions by length.
 */
 // [[Rcpp::export]]
-std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix, 
-                                          const int dbg_kmer){
+std::vector<std::string> assemble_contigs(
+    const std::vector<std::string> &read_kmers, 
+    const int &dbg_kmer, 
+    const int &seed){
+
+    // get contigs
+    gtl::flat_hash_map<int, std::vector<std::string>> contig_matrix = get_contigs(
+        read_kmers, dbg_kmer, seed
+    );
+
+    // init count of contigs
+    int contig_count = 0;
+
     // Loop over all the contig subsets and return assemblies in-place.
     // Note. Below code looks worse than it appears. In reality, it executes fast
     for(int contig_ind = 0; contig_ind < contig_matrix.size(); contig_ind++){
         
-        // Convert to a vector of strings
-        std::vector<std::string> contigs = Rcpp::as<std::vector<std::string>>(
-            contig_matrix[contig_ind]
-        );
+        // get contigs
+        std::vector<std::string> contigs = contig_matrix[contig_ind];
 
         for(int kmer = (dbg_kmer-1); kmer > 0; kmer--){
             bool len_changed = true;
@@ -242,36 +264,38 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix,
         }
         // Update the contig subset with the assembled contigs
         contig_matrix[contig_ind] = contigs;
+
+        // update total number of contigs
+        contig_count += contigs.size();
     }
 
     // flatten list into character vector and discard duplicates
-    std::vector<std::string> flat_contig_matrix;
-    for(int i = 0; i < contig_matrix.size(); i++){
-        std::vector<std::string> current_contigs = contig_matrix[i];
+    std::vector<std::string> flat_contig_matrix(contig_count);
+    int ind = 0;
+    for(const auto &kv : contig_matrix){
+        std::vector<std::string> current_contigs = kv.second;
         for(int j = 0; j < current_contigs.size(); j++){
-            flat_contig_matrix.push_back(current_contigs[j]);
+            flat_contig_matrix[ind] = current_contigs[j];
+            ind++;
         }
     }
 
     // Discard duplicates
-    Rcpp::CharacterVector r_flat_contig_matrix = Rcpp::wrap(flat_contig_matrix);
-    std::vector<std::string> contig_matrix_set = Rcpp::as<std::vector<std::string>>(
-        Rcpp::unique(r_flat_contig_matrix)
-    );
-
+    remove_duplicates(flat_contig_matrix);
+    
     // sort vector in descending order by length
     std::sort(
-        contig_matrix_set.begin(),
-        contig_matrix_set.end(),
+        flat_contig_matrix.begin(),
+        flat_contig_matrix.end(),
         [](const std::string &seq_a, const std::string &seq_b) -> bool {
             return seq_a.length() > seq_b.length();
     });
 
     // Retain top 5% of assembled solution by length
-    int top_5_percent = contig_matrix_set.size()*0.05;
+    int top_5_percent = flat_contig_matrix.size()*0.05;
     std::vector<std::string> top_5_percent_matrix(
-        contig_matrix_set.begin(),
-        contig_matrix_set.begin()+top_5_percent
+        flat_contig_matrix.begin(),
+        flat_contig_matrix.begin()+top_5_percent
     );
 
     return top_5_percent_matrix;
@@ -287,17 +311,15 @@ std::vector<std::string> assemble_contigs(Rcpp::List contig_matrix,
  * @return List of de novo assembled solutions and various calculations performed.
 */
 // [[Rcpp::export]]
-Rcpp::List calc_breakscore(std::vector<std::string> path, 
-                           std::vector<std::string> sequencing_reads, 
-                           std::string true_solution,
-                           const int kmer, 
-                           Rcpp::DataFrame bp_table){
-    // extract columns from Rcpp::DataFrame
-    std::vector<std::string> bp_kmer = Rcpp::as<std::vector<std::string>>(bp_table["kmer"]);
-    std::vector<double> bp_prob = Rcpp::as<std::vector<double>>(bp_table["prob"]);
+Rcpp::List calc_breakscore(const std::vector<std::string> &path, 
+                           const std::vector<std::string> &sequencing_reads, 
+                           const std::string &true_solution,
+                           const int &kmer, 
+                           const std::vector<std::string> &bp_kmer,
+                           const std::vector<double> &bp_prob){
 
     // hash map of kmers, probability values and break counts
-    std::map<std::string, std::pair<double, int>> bp_matrix;
+    gtl::flat_hash_map<std::string, std::pair<double, int>> bp_matrix;
     for(int i = 0; i < bp_kmer.size(); i++){
         bp_matrix[bp_kmer[i]] = std::make_pair(bp_prob[i], 0);
     }
@@ -308,68 +330,73 @@ Rcpp::List calc_breakscore(std::vector<std::string> path,
     std::vector<double> break_score_norm_by_len_vector(path.size());
     std::vector<double> nr_of_breaks_vector(path.size());
 
-    for(int i = 0; i < path.size(); i++){
-        // init total count of kmer breaks
-        int total_breaks = 0;
+    #pragma omp parallel for num_threads(10) shared(read) private(i)
+    {
+        #pragma omp for 
+        for(int i = 0; i < path.size(); i++){
+            // init total count of kmer breaks
+            int total_breaks = 0;
 
-        for(const auto &read : sequencing_reads){
-            // find exact match
-            std::size_t pos = path[i].find(read);
+            #pragma omp critical
+            for(const auto &read : sequencing_reads){
+                // find exact match
+                std::size_t pos = path[i].find(read);
 
-            if(pos != std::string::npos){
-                // get start pos of broken kmer
-                // take max of start pos of kmer or start of path
-                int start_pos_ind = std::max(0, (int)pos-(kmer/2));
+                if(pos != std::string::npos){
+                    // get start pos of broken kmer
+                    // take max of start pos of kmer or start of path
+                    int start_pos_ind = std::max(0, (int)pos-(kmer/2));
 
-                // extract broken kmer
-                std::string broken_kmer = path[i].substr(start_pos_ind, kmer);
+                    // extract broken kmer
+                    std::string broken_kmer = path[i].substr(start_pos_ind, kmer);
 
-                // Check if the broken kmer is in the bp_matrix
-                auto it = bp_matrix.find(broken_kmer);
-                if(it != bp_matrix.end()){
-                    std::get<1>(it->second)++;
-                    total_breaks += 1;
-                } else {
-                    // Get the reverse complement of the broken kmer
-                    std::string rev_comp_kmer = reverse_complement(broken_kmer);
+                    // Check if the broken kmer is in the bp_matrix
+                    auto it = bp_matrix.find(broken_kmer);
+                    if(it != bp_matrix.end()){
+                        std::get<1>(it->second)++;
+                        total_breaks++;
+                    } else {
+                        // Get the reverse complement of the broken kmer
+                        std::string rev_comp_kmer = reverse_complement(broken_kmer);
 
-                    // Check if the reverse complement kmer is in the bp_matrix
-                    auto it_rev = bp_matrix.find(rev_comp_kmer);
-                    if(it_rev != bp_matrix.end()){
-                        std::get<1>(it_rev->second)++;
-                        total_breaks += 1;
+                        // Check if the reverse complement kmer is in the bp_matrix
+                        auto it_rev = bp_matrix.find(rev_comp_kmer);
+                        if(it_rev != bp_matrix.end()){
+                            std::get<1>(it_rev->second)++;
+                            total_breaks++;
+                        }
                     }
                 }
             }
-        }
 
-        // Loop over the bp_matrix
-        for(auto it = bp_matrix.begin(); it != bp_matrix.end(); it++){
-            double prob = std::get<0>(it->second);
-            int break_count = std::get<1>(it->second);
+            // Loop over the bp_matrix
+            #pragma omp for
+            for(auto it = bp_matrix.begin(); it != bp_matrix.end(); it++){
+                double prob = std::get<0>(it->second);
+                int break_count = std::get<1>(it->second);
 
-            // Multiply non-zero break_scores with the probability values,
-            // add the result to the break_score_vector
-            if(break_count != 0){
-                double break_score = prob*break_count;
-                break_score_vector[i] += break_score;
+                // Multiply non-zero break_scores with the probability values,
+                // add the result to the break_score_vector
+                if(break_count != 0){
+                    double break_score = prob*break_count;
+                    break_score_vector[i] += break_score;
 
-                // normalised break score by break counts
-                double norm_break_count = (double)break_count/(double)total_breaks;
-                double norm_break_score = prob*norm_break_count;
-                norm_break_score_vector[i] += norm_break_score;
+                    // normalised break score by break counts
+                    double norm_break_count = (double)break_count/(double)total_breaks;
+                    double norm_break_score = prob*norm_break_count;
+                    norm_break_score_vector[i] += norm_break_score;
 
-                // reset kmer break counter
-                it->second = std::make_pair(std::get<0>(it->second), 0);       
+                    // reset kmer break counter
+                    it->second = std::make_pair(std::get<0>(it->second), 0);       
+                }
             }
+            nr_of_breaks_vector[i] = total_breaks;
+            
+            // normalised break score by sequence length
+            double norm_by_len = (double)break_score_vector[i]/(double)path[i].length();
+            break_score_norm_by_len_vector[i] = norm_by_len;
         }
-        nr_of_breaks_vector[i] = total_breaks;
-        
-        // normalised break score by sequence length
-        double norm_by_len = (double)break_score_vector[i]/(double)path[i].length();
-        break_score_norm_by_len_vector[i] = norm_by_len;
     }
-
     // sort the break_score_vector in descending order
     // initialise original index locations
     std::vector<size_t> idx(break_score_vector.size());
