@@ -21,8 +21,9 @@ DeNovoAssembler <- R6::R6Class(
         results = NULL,
 
         initialize = function(seq_len, read_len, kmer, dbg_kmer, 
-                              seed, ind, action, reads_only){
+                              seed, ind, action, reads_only, cores){
             if(!missing(reads_only)) private$reads_only <- reads_only
+            if(!missing(cores)) private$cores <- cores
             super$initialize(
                 seq_len = seq_len,
                 read_len = read_len,
@@ -67,6 +68,9 @@ DeNovoAssembler <- R6::R6Class(
         #'  not assembly the genome.
         reads_only = FALSE,
 
+        #' @field cores Numeric vector of the number of cores to use in omp.h
+        cores = 1,
+
         #' @description
         #' Extract kmers from sonicated sequencing reads.
         #' @return None.
@@ -103,17 +107,11 @@ DeNovoAssembler <- R6::R6Class(
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(paste0(cur.msg, l))
 
-            # get contigs
-            self$contigs <- get_contigs(
-                read_kmers = self$read_kmers, 
-                dbg_kmer = self$dbg_kmer, 
-                seed = private$seed
-            )
-
             # assemble contigs
             self$scaffolds <- assemble_contigs(
-                contig_matrix = self$contigs, 
-                dbg_kmer = self$dbg_kmer
+                read_kmers = self$read_kmers, 
+                dbg_kmer = self$dbg_kmer,
+                seed = private$seed
             )
 
             # calculate breakage scores
@@ -122,7 +120,9 @@ DeNovoAssembler <- R6::R6Class(
                 sequencing_reads = self$sequencing_reads$read_one, 
                 true_solution = self$dbg_summary$genome_seq,
                 kmer = self$kmer, 
-                bp_table = as.data.frame(self$df_prob)
+                bp_kmer = self$kmer_ref$kmer,
+                bp_prob = self$kmer_ref$prob,
+                num_threads = private$cores
             )
             self$results <- as.data.table(self$results)
 

@@ -1,4 +1,4 @@
-// [[Rcpp::plugins("cpp20")]]
+// [[Rcpp::plugins("cpp17")]]
 #include <Rcpp.h>
 #include <algorithm>
 #include <numeric>
@@ -7,6 +7,7 @@
 // fast hash map
 #include <gtl/include/gtl/phmap.hpp>
 
+// parallel for loop
 #include </usr/local/Cellar/libomp/15.0.7/include/omp.h>
 
 // edlib dependency
@@ -341,6 +342,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<double> norm_break_score_vector(path.size());
     std::vector<double> break_score_norm_by_len_vector(path.size());
     std::vector<double> nr_of_breaks_vector(path.size());
+    std::vector<int> path_len(path.size());
 
     #pragma omp parallel for num_threads(num_threads) shared(read) private(i)
     {
@@ -394,9 +396,10 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                 }
             }
             nr_of_breaks_vector[i] = total_breaks;
+            path_len[i] = (int)path[i].length();
             
             // normalised break score by sequence length
-            double norm_by_len = (double)break_score_vector[i]/(double)path[i].length();
+            double norm_by_len = (double)break_score_vector[i]/path_len[i];
             break_score_norm_by_len_vector[i] = norm_by_len;
         }
     }
@@ -417,7 +420,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<double> sorted_bp_score_norm_by_break_freqs(idx.size());
     std::vector<double> sorted_bp_score_norm_by_len(idx.size());
     std::vector<std::string> sorted_path(idx.size());
-    std::vector<int> path_len(idx.size());
+    std::vector<int> sorted_path_len(idx.size());
     std::vector<int> sorted_nr_of_breaks_vector(idx.size());
     std::vector<int> lev_dist_vs_true(idx.size());
 
@@ -426,7 +429,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         sorted_bp_score_norm_by_break_freqs[i] = norm_break_score_vector[idx[i]];
         sorted_bp_score_norm_by_len[i] = break_score_norm_by_len_vector[idx[i]];
         sorted_path[i] = path[idx[i]];
-        path_len[i] = path[idx[i]].length();
+        sorted_path_len[i] = path_len[idx[i]];
         sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
 
         // calculate levenshtein distance of assembled vs true solution
