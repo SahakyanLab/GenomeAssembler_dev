@@ -56,6 +56,11 @@ int calc_levenshtein(const std::string &query, const std::string &target){
   return 0;
 }
 
+/**
+ * Remove duplicates
+ * @param vec vector containing duplicates.
+ * @return unique elements in vector.
+*/
 template <typename T>
 void remove_duplicates(std::vector<T> &vec){
     std::sort(vec.begin(), vec.end());
@@ -82,7 +87,7 @@ void remove_duplicates(std::vector<T> &vec){
 gtl::flat_hash_map<int, std::vector<std::string>> get_contigs(
     const std::vector<std::string> &read_kmers, 
     const int &dbg_kmer, 
-    const int &seed){
+    const int &seed){    
     // init prefix and suffix vectors
     std::vector<std::string> prefix(read_kmers.size());
     std::vector<std::string> suffix(read_kmers.size());
@@ -316,12 +321,19 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                            const std::string &true_solution,
                            const int &kmer, 
                            const std::vector<std::string> &bp_kmer,
-                           const std::vector<double> &bp_prob){
+                           const std::vector<double> &bp_prob,
+                           const int &num_threads){
 
     // hash map of kmers, probability values and break counts
     gtl::flat_hash_map<std::string, std::pair<double, int>> bp_matrix;
     for(int i = 0; i < bp_kmer.size(); i++){
         bp_matrix[bp_kmer[i]] = std::make_pair(bp_prob[i], 0);
+    }
+
+    // hash map of reads and number of counts
+    gtl::flat_hash_map<std::string, int> read_matrix;
+    for(const auto & read : sequencing_reads){
+        read_matrix[read]++;
     }
 
     // init break score vector
@@ -330,7 +342,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<double> break_score_norm_by_len_vector(path.size());
     std::vector<double> nr_of_breaks_vector(path.size());
 
-    #pragma omp parallel for num_threads(10) shared(read) private(i)
+    #pragma omp parallel for num_threads(num_threads) shared(read) private(i)
     {
         #pragma omp for 
         for(int i = 0; i < path.size(); i++){
@@ -338,7 +350,11 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
             int total_breaks = 0;
 
             #pragma omp critical
-            for(const auto &read : sequencing_reads){
+            for(const auto &kv : read_matrix){
+                // extract key-value pair
+                std::string read = kv.first; 
+                int read_count = kv.second;
+
                 // find exact match
                 std::size_t pos = path[i].find(read);
 
@@ -350,30 +366,17 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                     // extract broken kmer
                     std::string broken_kmer = path[i].substr(start_pos_ind, kmer);
 
-                    // Check if the broken kmer is in the bp_matrix
-                    auto it = bp_matrix.find(broken_kmer);
-                    if(it != bp_matrix.end()){
-                        std::get<1>(it->second)++;
-                        total_breaks++;
-                    } else {
-                        // Get the reverse complement of the broken kmer
-                        std::string rev_comp_kmer = reverse_complement(broken_kmer);
-
-                        // Check if the reverse complement kmer is in the bp_matrix
-                        auto it_rev = bp_matrix.find(rev_comp_kmer);
-                        if(it_rev != bp_matrix.end()){
-                            std::get<1>(it_rev->second)++;
-                            total_breaks++;
-                        }
-                    }
+                    // update counter in matrix
+                    bp_matrix[broken_kmer].second += read_count;
+                    total_breaks += read_count;
                 }
             }
 
             // Loop over the bp_matrix
             #pragma omp for
-            for(auto it = bp_matrix.begin(); it != bp_matrix.end(); it++){
-                double prob = std::get<0>(it->second);
-                int break_count = std::get<1>(it->second);
+            for(auto &kv : bp_matrix){
+                double prob = kv.second.first;
+                int break_count = kv.second.second;
 
                 // Multiply non-zero break_scores with the probability values,
                 // add the result to the break_score_vector
@@ -387,7 +390,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                     norm_break_score_vector[i] += norm_break_score;
 
                     // reset kmer break counter
-                    it->second = std::make_pair(std::get<0>(it->second), 0);       
+                    kv.second.second = 0;
                 }
             }
             nr_of_breaks_vector[i] = total_breaks;
@@ -397,6 +400,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
             break_score_norm_by_len_vector[i] = norm_by_len;
         }
     }
+    
     // sort the break_score_vector in descending order
     // initialise original index locations
     std::vector<size_t> idx(break_score_vector.size());
