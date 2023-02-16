@@ -9,6 +9,9 @@ GenerateReads <- R6::R6Class(
         #'  ultrasonication experiments.
         df_prob = NULL,
 
+        #' @field kmer_ref Data.table of all kmers and probabilities.
+        kmer_ref = NULL,
+
         #' @field kmer Numeric vector. Length of kmer for breakage probability. 
         #'  Kmer can only take values of c(4,6,8).
         kmer = 4,
@@ -230,18 +233,19 @@ GenerateReads <- R6::R6Class(
             #     ))
             #     return(avg.prob)
             # })
+            nr.of.dummy.bases <- (self$kmer/2-1)
             self$genome_seq <- c(
-                rep("N", (self$kmer/2-1)), 
+                rep("N", nr.of.dummy.bases), 
                 self$genome_seq, 
-                rep("N", (self$kmer/2-1))
+                rep("N", nr.of.dummy.bases)
             )
 
             # add dummy k-mers from each end of randSeq onto k-mer vector
-            dummy.base.start <- sapply(1:(self$kmer-1), function(x){
+            dummy.base.start <- sapply(1:nr.of.dummy.bases, function(x){
                 paste0(self$genome_seq[x:(self$kmer+x-1)], collapse = "")
             }, USE.NAMES = FALSE)
-            dummy.base.end <- tail(self$genome_seq, n = (2*self$kmer-2))
-            dummy.base.end <- sapply(1:(self$kmer-1), function(x){
+            dummy.base.end <- tail(self$genome_seq, n = (self$kmer+nr.of.dummy.bases-1))
+            dummy.base.end <- sapply(1:nr.of.dummy.bases, function(x){
                 paste0(dummy.base.end[x:(self$kmer+x-1)], collapse = "")
             }, USE.NAMES = FALSE)
             dummy.bases <- c(dummy.base.start, dummy.base.end)
@@ -270,6 +274,36 @@ GenerateReads <- R6::R6Class(
             to.keep <- c("kmer", "prob.norm")
             self$df_prob <- self$df_prob[, ..to.keep]
             setnames(self$df_prob, c("kmer", "prob"))
+
+            # for cpp code
+            rev.comp = as.character(
+                Biostrings::reverseComplement(
+                    Biostrings::DNAStringSet(self$df_prob$kmer)
+                )
+            )
+            self$df_prob[, rev_comp := rev.comp]
+
+            k.mers <- do.call(
+                data.table::CJ, 
+                rep(list(c("A", "C", "G", "T")), 
+                self$kmer)
+            )
+            kmer_list <- k.mers[, do.call(paste0, .SD)]
+            self$kmer_ref <- data.table(kmer=kmer_list)
+            self$kmer_ref[, prob := 0]
+            setnames(dummy.bases.df, c("kmer", "prob"))
+            self$kmer_ref <- rbindlist(list(self$kmer_ref, dummy.bases.df))
+            self$kmer_ref[, prob := 0]
+
+            # forward kmers
+            ind_fwd <- match(self$df_prob$kmer, self$kmer_ref$kmer)
+            self$kmer_ref$prob[ind_fwd] <- self$df_prob$prob
+
+            # reverse complement kmers
+            ind_rc <- match(self$df_prob$rev_comp, self$kmer_ref$kmer)
+            ind_rc[is.na(ind_rc)] <- (nrow(self$kmer_ref)-nrow(dummy.bases.df)+1):nrow(self$kmer_ref)
+            self$kmer_ref$prob[ind_rc] <- self$df_prob$prob
+            self$df_prob[, rev_comp := NULL]
 
             # obtain all k-mers of the randomly generated string
             end <- length(self$genome_seq)-self$kmer+1
