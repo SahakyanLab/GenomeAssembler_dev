@@ -331,6 +331,24 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         bp_matrix[bp_kmer[i]] = std::make_pair(bp_prob[i], 0);
     }
 
+    // hash map of a de novo sequenc solution and vector of probabilites
+    gtl::flat_hash_map<std::string, std::vector<double>> path_prob_dist;
+    for(int i = 0; i < path.size(); i++){
+        std::string current_path = path[i];
+
+        // init vector of prob for current path
+        std::vector<double> prob_dist(current_path.length()-kmer+1);
+
+        // get probability values in rolling window
+        for(int pos = 0; pos <= current_path.length()-kmer; pos++){
+            std::string current_kmer = current_path.substr(pos, kmer);
+            prob_dist[pos] = bp_matrix[current_kmer].first;
+        }
+
+        // push into hash map
+        path_prob_dist[path[i]] = prob_dist;
+    }
+
     // hash map of reads and number of counts
     gtl::flat_hash_map<std::string, int> read_matrix;
     for(const auto & read : sequencing_reads){
@@ -423,6 +441,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<int> sorted_path_len(idx.size());
     std::vector<int> sorted_nr_of_breaks_vector(idx.size());
     std::vector<int> lev_dist_vs_true(idx.size());
+    std::vector<std::vector<double>> sorted_path_prob_dist(idx.size());
 
     for(int i = 0; i < idx.size(); i++){
         sorted_break_score[i] = break_score_vector[idx[i]];
@@ -431,6 +450,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         sorted_path[i] = path[idx[i]];
         sorted_path_len[i] = path_len[idx[i]];
         sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
+        sorted_path_prob_dist[i] = path_prob_dist[sorted_path[i]];
 
         // calculate levenshtein distance of assembled vs true solution
         int lev_dist = calc_levenshtein(path[idx[i]], true_solution);
@@ -444,6 +464,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         Rcpp::Named("bp_score_norm_by_break_freqs") = sorted_bp_score_norm_by_break_freqs,
         Rcpp::Named("bp_score_norm_by_len") = sorted_bp_score_norm_by_len,
         Rcpp::Named("kmer_breaks") = sorted_nr_of_breaks_vector,
-        Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true
+        Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true,
+        Rcpp::Named("path_prob_dist") = Rcpp::wrap(sorted_path_prob_dist)
     );
 }

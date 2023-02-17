@@ -9,6 +9,9 @@ GenerateReads <- R6::R6Class(
         #'  ultrasonication experiments.
         df_prob = NULL,
 
+        #' @field kmer_from_seq Data.Table of kmers and probabilities of true solution.
+        kmer_from_seq = NULL,
+
         #' @field kmer_ref Data.table of all kmers and probabilities.
         kmer_ref = NULL,
 
@@ -340,6 +343,7 @@ GenerateReads <- R6::R6Class(
             fwd.prob.ind <- fwd.ind[which(!is.na(fwd.ind))]
             fwd.kmer.ind <- which(!is.na(fwd.ind))
             kmer.from.seq$prob[fwd.kmer.ind] <- self$df_prob$prob[fwd.prob.ind]
+            self$kmer_from_seq <- kmer.from.seq$prob
 
             # plot breakage probability over the full genome sequence
             mytitle <- "Kmeric breakage probabilities of genome sequence"

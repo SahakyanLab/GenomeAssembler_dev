@@ -38,11 +38,12 @@ DeNovoAssembler <- R6::R6Class(
         #' @description
         #' Run de novo genome assembly process with de bruijn graph data structure.
         #' @param bins Numeric vector of how many breaks to create when plotting results.
+        #' @param total_iters total number of experiments to run.
         #' @return None.
-        run_assembler = function(bins = 10){
+        run_assembler = function(bins = 6, total_iters = 100){
             start.time <- Sys.time()
             cur.msg <- paste0("Running a proof of principle simulation ", 
-                              "for experiment: ", private$ind, "/", 1000)
+                              "for experiment: ", private$ind, "/", total_iters)
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(cur.msg, l, "\n", sep = "")
 
@@ -125,6 +126,24 @@ DeNovoAssembler <- R6::R6Class(
                 num_threads = private$cores
             )
             self$results <- as.data.table(self$results)
+
+            # Kulback-Leibler Divergence
+            bd.kl.mat <- sapply(1:nrow(self$results), function(x){
+                # statistical test of similarity
+                a_solution <- self$results$path_prob_dist[[x]]
+
+                # KL Divergence requires both vectors to be of the same length.
+                # Thus, truncate the longer one.
+                min_length <- min(length(a_solution), length(self$kmer_from_seq))
+                true_solution_prob_truncated <- self$kmer_from_seq[1:min_length]
+                a_solution_truncated <- a_solution[1:min_length]
+
+                # Kulback-Leibler Divergence
+                PQ <- rbind(a_solution_truncated, true_solution_prob_truncated)
+                PQ <- philentropy::KL(PQ) %>% suppressMessages()
+                return(unname(PQ))
+            })
+            self$results[, stat_test_KL := bd.kl.mat]
 
             total.time <- Sys.time() - t1
             cat("DONE! --", signif(total.time[[1]], 2), 
@@ -218,7 +237,7 @@ DeNovoAssembler <- R6::R6Class(
                 width = 19, 
                 height = 5
             )
-            par(mfrow = c(1,3))
+            par(mfrow = c(1,4))
             par(mar=c(7,6,4,1))
             boxplot(
                 bp_score ~ bins, 
@@ -233,6 +252,17 @@ DeNovoAssembler <- R6::R6Class(
             )
             mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
             mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
+            boxplot(
+                stat_test_KL ~ bins, 
+                data = self$results, 
+                frame = FALSE,
+                col = "lightblue",
+                border = "black",
+                xlab = "",
+                ylab = "Kulback-Leibler Divergence",
+                main = "",
+                las = 3
+            )
             boxplot(
                 bp_score_norm_by_len ~ bins, 
                 data = self$results, 
