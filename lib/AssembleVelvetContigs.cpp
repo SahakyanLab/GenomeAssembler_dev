@@ -71,150 +71,27 @@ void remove_duplicates(std::vector<T> &vec){
 }
 
 /**
- * Generate contigs from sonicated sequencing reads. Logic flow is:
-    * 1) Generate prefix and suffix.
-    * 2) Find balanced counts for in- and out-degrees per node.
-    * 3) Find branching points.
-    * 4) Generate contigs.
-    * 5) Shuffle order of contigs and assemble each run.
- * @param read_kmer kmers generated from sequencing reads.
+ * Assemble each batch of contigs through brute force alignment.
+ * @param contig_matrix list of shuffled contigs.
  * @param dbg_kmer size of kmer per de bruijn graph node.
- * @param seed set seed for reproducible results.
- * @return contig_matrix list of shuffled contigs.
+ * @return top_5_percent_matrix top 5% of assembled solutions by length.
 */
 // [[Rcpp::export]]
-std::vector<std::vector<std::string>> get_contigs(
-    const std::vector<std::string> &read_kmers, 
+std::vector<std::string> assemble_contigs(
+    const std::vector<std::string> &velvet_contigs, 
     const int &dbg_kmer, 
-    const int &seed){    
-    // init prefix and suffix vectors
-    std::vector<std::string> prefix(read_kmers.size());
-    std::vector<std::string> suffix(read_kmers.size());
-
-    for(int i = 0; i < read_kmers.size(); i++){
-        // extract single kmer from string vector
-        std::string read_kmer = read_kmers[i];
-
-        // extract prefix and suffix of kmer
-        prefix[i] = read_kmer.substr(0, dbg_kmer-1);
-        suffix[i] = read_kmer.substr(1, dbg_kmer);
-    }
-
-    // init hash map of prefix and suffix
-    gtl::flat_hash_map<std::string, std::vector<std::string>> dict;
-
-    // fill hash map with pre- and suffixes
-    for(int i = 0; i < prefix.size(); i++){
-        std::string key = prefix[i];
-        std::string value = suffix[i];
-
-        if(dict[key].empty()){
-            // creates new entry in map if previously not existing
-            dict[key].push_back(value);
-        } else {
-            // points to iterator if found, else end of vector
-            auto it = std::find(dict[key].begin(), dict[key].end(), value);
-            if(it == dict[key].end()){
-                // if value not present
-                dict[key].push_back(value);
-            }
-        }
-    }
-
-    // init hash map of balanced counts
-    gtl::flat_hash_map<std::string, std::pair<int, int>> balanced_count;
-
-    // get unique prefix and suffix
-    remove_duplicates(prefix);
-    remove_duplicates(suffix);
-    
-    // combine results 
-    prefix.insert(
-        prefix.end(), 
-        suffix.begin(), 
-        suffix.end()
-    );
-
-    // init balanced counts to zeros
-    for(int i = 0; i < prefix.size(); i++){
-        std::string key = prefix[i];
-        balanced_count[key] = std::make_pair(0,0);
-    }
-
-    // update balance count per node
-    // & calls by reference = any changes made, will change its reference
-    for(const auto &pair : dict){
-        const std::string &node = pair.first;
-        const std::vector<std::string> &edges = pair.second;
-
-        // out-degree
-        balanced_count[node].second += edges.size(); 
-
-        // in-degree
-        for(const auto &edge : edges){
-            const std::string &current_edge = edge;
-            balanced_count[current_edge].first++;
-        }
-    }
-
-    // find branching points
-    std::vector<std::string> keys_with_balanced_count;
-    for(const auto &pair : balanced_count){
-        if(pair.second.first != 1 || pair.second.second != 1){
-            // keep branching point only if it's a node
-            if(dict.count(pair.first)){
-                keys_with_balanced_count.push_back(pair.first);
-            }
-        }
-    }
-
-    // get contigs
-    std::vector<std::string> contigs;
-    for(const auto &node : keys_with_balanced_count){
-        const std::vector<std::string> edges = dict[node];
-        for(const auto &edge : edges){
-            std::string current_node = edge;
-            std::string path = node;       
-
-            while(std::find(keys_with_balanced_count.begin(), 
-                            keys_with_balanced_count.end(), 
-                            current_node) == keys_with_balanced_count.end()){
-                if(dict[current_node].empty()) break;
-                path.append(current_node.substr(current_node.size()-1, 1));
-                current_node = dict[current_node][0];
-            }
-            path.append(current_node.substr(current_node.size()-1, 1));
-            contigs.push_back(path);
-        }
-    }
-
-    // remove duplicates
-    remove_duplicates(contigs);
-
+    const int &seed){
+ 
     // Randomly shuffle the order of contigs for assembly
-    int matrix_size = 10000;
+    int matrix_size = 20000;
     std::mt19937 engine(seed);
     std::vector<std::vector<std::string>> contig_matrix;
     contig_matrix.resize(matrix_size);
     for(int i = 0; i < matrix_size; i++){
-        std::vector<std::string> contigs_copy = contigs;
+        std::vector<std::string> contigs_copy = velvet_contigs;
         std::shuffle(contigs_copy.begin(), contigs_copy.end(), engine);
         contig_matrix[i] = contigs_copy;
     }
-
-    return contig_matrix;
-}
-
-/**
- * Assemble each batch of contigs through brute force alignment.
- * @param contig_matrix list of shuffled contigs.
- * @param dbg_kmer size of kmer per de bruijn graph node.
- * @return top_30_percent_matrix top 30% of assembled solutions by length.
-*/
-// [[Rcpp::export]]
-std::vector<std::string> assemble_contigs(
-    const std::vector<std::vector<std::string>> &contig_matrix, 
-    const int &dbg_kmer){
 
     // scaffold matrix
     std::vector<std::vector<std::string>> scaffold_matrix;
@@ -293,19 +170,12 @@ std::vector<std::string> assemble_contigs(
             return seq_a.length() > seq_b.length();
     });
 
-    // Retain top 30% of assembled solution by length
-    int top_30_percent = flat_contig_matrix.size()*1;
-    std::vector<std::string> top_30_percent_matrix(
-        flat_contig_matrix.begin(),
-        flat_contig_matrix.begin()+top_30_percent
-    );
-
-    return top_30_percent_matrix;
+    return flat_contig_matrix;
 }
 
 /**
  * Calculate breakage score for each de novo assembled solutions.
- * @param path top 30% of assembled solutions by length.
+ * @param path top 5% of assembled solutions by length.
  * @param sequencing_reads all sequencing reads from ultrasonication.
  * @param true_solution the true solution for this experiment. 
  * @param kmer size of k-meric break.
@@ -318,7 +188,8 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                            const std::string &true_solution,
                            const int &kmer, 
                            const std::vector<std::string> &bp_kmer,
-                           const std::vector<double> &bp_prob){
+                           const std::vector<double> &bp_prob,
+                           const int &num_threads){
 
     // hash map of kmers, probability values and break counts
     gtl::flat_hash_map<std::string, std::pair<double, int>> bp_matrix;
@@ -434,11 +305,11 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<size_t> idx(break_score_vector.size());
     std::iota(idx.begin(), idx.end(), 0); 
 
-    // // sort indices based on comparing values in break_score_vector
-    // std::sort(idx.begin(), idx.end(), 
-    //      [&break_score_vector](size_t idx_1, size_t idx_2){ 
-    //         return break_score_vector[idx_1] > break_score_vector[idx_2]; 
-    // });
+    // sort indices based on comparing values in break_score_vector
+    std::sort(idx.begin(), idx.end(), 
+         [&break_score_vector](size_t idx_1, size_t idx_2){ 
+            return break_score_vector[idx_1] > break_score_vector[idx_2]; 
+    });
 
     // reorder elements
     std::vector<double> sorted_break_score(idx.size());
