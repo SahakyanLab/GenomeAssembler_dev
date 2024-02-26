@@ -11,4 +11,4 @@
 *.RData
 # ignore these directories with all the files within
 temp/
-
+archive/
