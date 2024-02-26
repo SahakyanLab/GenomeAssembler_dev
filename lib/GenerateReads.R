@@ -29,9 +29,11 @@ GenerateReads <- R6::R6Class(
         #' @field sequencing_reads Character vector of all sequencing reads.
         sequencing_reads = NULL,
 
-        initialize = function(seq_len, read_len, kmer, dbg_kmer, seed, ind, action){
+        initialize = function(seq_len, read_len, coverage_target, 
+                              kmer, dbg_kmer, seed, ind, action){
             if(!missing(seq_len)) private$seq_len <- seq_len
             if(!missing(read_len)) private$read_len <- read_len
+            if(!missing(coverage_target)) private$coverage_target <- coverage_target
             if(!missing(kmer)) self$kmer <- kmer
             if(!missing(dbg_kmer)) self$dbg_kmer <- dbg_kmer
             if(!missing(seed)) private$seed <- seed
@@ -47,44 +49,45 @@ GenerateReads <- R6::R6Class(
         sample_ref_genome = function(){
             # progress message
             t1 <- Sys.time()
-            cur.msg <- "Sampling masked hg38 reference genome"
+            cur.msg <- "Sampling genomic positions from the T2T human genome"
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(paste0(cur.msg, l))
 
-            genome <- BSgenome.Hsapiens.UCSC.hg38.masked::BSgenome.Hsapiens.UCSC.hg38.masked
-            genome.attr <- attr(genome, "seqinfo")
-            genome.lens <- attr(genome.attr, "seqlengths")[1:22]
+            genome <- BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0
 
-            # sample 1k sequences
-            N.sample <- 3000
-            which.chr <- sample(x = 1:22, size = N.sample, replace = TRUE)
-            sample.dt <- data.table(seqnames = 1:22, len = genome.lens)
-            sample.dt <- sample.dt[match(which.chr, sample.dt$seqnames)]
-            start.pos <- sapply(1:nrow(sample.dt), function(x){
-                sample(x = 1:(sample.dt$len[x]-private$seq_len), size = 1)
-            })
+            # get the start and end positions of each chromosome
+            refseq.table <- as.data.frame(genome@seqinfo)
+            refseq.table <- refseq.table[grepl(
+                pattern = "^([1-9]|1[0-9]|2[0-2])$", 
+                x = rownames(refseq.table)
+            ),]
+            refseq.table <- data.table(
+                seqnames = rownames(refseq.table),
+                len = refseq.table$seqlengths
+            )
+
+            # sample sequences
+            N.sample <- 1000
+            sample.dt <- refseq.table[sample(x = .N, size = N.sample, replace = TRUE)]
             sample.dt[, `:=`(
-                start = start.pos, 
+                start = sapply(len, function(l) sample(x = 1:(l-1), size = 1)),
                 width = private$seq_len,
                 len = NULL
             )]
-            setorder(sample.dt, seqnames)
+            setorder(sample.dt, seqnames, start)
             sample.dt[, seqnames := paste0("chr", seqnames)]
             seq.names <- paste0(sample.dt$seqnames, "_", sample.dt$start)
 
             # extract sequences
             sample.dt <- plyranges::as_granges(sample.dt)
+
+            if(!any(grepl(pattern = "^chr", x = seqnames(genome)))){
+                chr_names <- paste0("chr", seqnames(genome))
+                seqnames(genome@seqinfo) <- seqnames(genome) <- chr_names
+            }
             ref.sequences <- Biostrings::getSeq(genome, sample.dt)
             names(ref.sequences) <- seq.names
             ref.sequences <- unique(ref.sequences)
-
-            # filter results
-            any.ns <- gregexpr(pattern = "N", text = ref.sequences)
-            to.keep <- which(sapply(any.ns, `[`, 1) == -1)
-            ref.sequences <- ref.sequences[to.keep]
-
-            # randomly select 1k sequences
-            ref.sequences <- sample(ref.sequences, size = 1000, replace = FALSE)
             
             # save results
             dir.create(
@@ -95,7 +98,7 @@ GenerateReads <- R6::R6Class(
                 x = ref.sequences, 
                 filepath = paste0(
                     "../data/refseq/SampledRefGenome",
-                    "_SeqLen-", private$seq_len, 
+                    "_SeqLen-", format(private$seq_len, scientific = FALSE), 
                     "_SeqSeed-", private$seed,
                     ".fasta"
                 ), 
@@ -112,6 +115,7 @@ GenerateReads <- R6::R6Class(
         #' to produce sequencing reads biased by the intrinsic breakage probabilities.
         #' @return None.
         get_reads = function(){
+            private$load_all_ref_seq()
             private$extract_genome_seq()
             private$generate_sequencing_reads()
         }
@@ -139,38 +143,60 @@ GenerateReads <- R6::R6Class(
         #' @field ind Numeric vector of the subsetted reference sequence.
         ind = NULL,
 
+        #' @field coverage_target Numeric vector of the desired sequencing coverage using 
+        #' the Lander/Waterman equation.
+        coverage_target = 10,
+
         #' @description
         #' Get probability values for ultrasonication experiments.
         #' @return None.
-        get_prob_values = function(){
-            df.prob <- fread(
-                file = paste0("../data/QueryTable/", 
-                              "QueryTable_kmer-", 
-                              self$kmer, ".csv"),
-                showProgress = FALSE
-            )
-            if(private$action == "zscore"){
-                df.prob[, zscore := (
-                    zscore-min(zscore, na.rm = TRUE)
-                )/(max(zscore, na.rm = TRUE)-min(zscore, na.rm = TRUE)
-                )]
-            }
-            private$cols_to_keep <- to.keep <- c("kmer", private$action)
-            self$df_prob <- df.prob[, ..to.keep]
+        get_prob_values = function(){            
+            df_probs <- lapply(seq(2,8,2), function(k){
+                dat <- fread(
+                    file = paste0("../data/QueryTable/QueryTable_kmer-", k, ".csv"),
+                    showProgress = FALSE
+                )
+
+                # replace NAs with the lowest probabilities in the table
+                nas <- which(is.na(dat$prob))
+                if(any(nas)){
+                    lowest.probs <- min(dat$prob, na.rm = TRUE)
+                    dat$prob[nas] <- lowest.probs
+                }
+                return(dat)
+            })
+            df_probs <- rbindlist(df_probs)
+
+            # normalise probability vector to sum to one
+            df_probs[, `:=`(
+                prob = prob / sum(prob, na.rm = TRUE),
+                kmer_len = nchar(kmer)
+            )]
+
+            self$df_prob <- split(df_probs, df_probs$kmer_len)
+            names(self$df_prob) <- paste0("kmer_", seq(2,8,2))
+            self$df_prob <- lapply(self$df_prob, function(x) x[, kmer_len := NULL])
+            
+            self$df_prob$all <- df_probs
+            self$df_prob$all[, kmer_len := NULL]
         },
 
         #' @description
         #' Load in all reference sequences that was sampled from hg38 masked version.
         #' @return None.
-        load_all_ref_seq = function(){
-            private$genome <- Biostrings::readDNAStringSet(
-                filepath = paste0(
-                    "../data/refseq/SampledRefGenome",
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
-                    ".fasta"
-                )
+        load_all_ref_seq = function(){ 
+            ref.genome.file <- paste0(
+                "../data/refseq/SampledRefGenome", 
+                "_SeqLen-", format(private$seq_len, scientific = FALSE), 
+                "_SeqSeed-", private$seed,
+                ".fasta"
             )
+
+            # sample from human genome if file doesn't exist 
+            if(!file.exists(ref.genome.file)) assembler$sample_ref_genome()
+
+            # load in the genome
+            private$genome <- Biostrings::readDNAStringSet(filepath = ref.genome.file)
         },
 
         #' @description
@@ -192,8 +218,8 @@ GenerateReads <- R6::R6Class(
                 letters = "ACGT", 
                 OR = 0
             )
-            all.letters <- all.letters/width(private$genome[private$ind])
-            self$dbg_summary$base_composition <- signif(all.letters[1,], digits = 4)
+            self$dbg_summary$base_composition <- all.letters/width(private$genome[private$ind])
+            # self$dbg_summary$base_composition <- signif(all.letters[1,], digits = 4)
 
             total.time <- Sys.time() - t1
             cat("DONE! --", signif(total.time[[1]], 2), 
@@ -211,103 +237,6 @@ GenerateReads <- R6::R6Class(
             l <- paste0(rep(".", 70-nchar(cur.msg)), collapse = "")
             cat(paste0(cur.msg, l))
 
-            # # Average probability based on non-N dummy bases
-            # # add dummy base to start of the random sequence
-            # start.of.genome <- genome_seq[1:(kmer-1)]
-            # dummy.bases.start <- c(rep("N", (kmer-1)), start.of.genome)
-            # dummy.bases.start <- sapply(1:(kmer-1), function(x){
-            #     paste0(dummy.bases.start[x:(kmer+x-1)], collapse = "")
-            # }, USE.NAMES = FALSE)
-            # sapply(1:length(dummy.bases.start), function(x){
-            #     kmer.to.find <- stringr::str_remove_all(
-            #         string = dummy.bases.start[x],
-            #         pattern = "N"
-            #     )
-            #     similar.kmers <- stringr::str_locate(
-            #         string = df.prob$kmer, 
-            #         pattern = kmer.to.find
-            #     )
-            #     kmer.matches <- which(
-            #         similar.kmers[, "start"] == (kmer-nchar(kmer.to.find)+1)
-            #     )
-            #     avg.prob <- as.numeric(colMeans(
-            #         df.prob[kmer.matches, ..action], 
-            #         na.rm = TRUE
-            #     ))
-            #     return(avg.prob)
-            # })
-            nr.of.dummy.bases <- (self$kmer/2-1)
-            self$genome_seq <- c(
-                rep("N", nr.of.dummy.bases), 
-                self$genome_seq, 
-                rep("N", nr.of.dummy.bases)
-            )
-
-            # add dummy k-mers from each end of randSeq onto k-mer vector
-            dummy.base.start <- sapply(1:nr.of.dummy.bases, function(x){
-                paste0(self$genome_seq[x:(self$kmer+x-1)], collapse = "")
-            }, USE.NAMES = FALSE)
-            dummy.base.end <- tail(self$genome_seq, n = (self$kmer+nr.of.dummy.bases-1))
-            dummy.base.end <- sapply(1:nr.of.dummy.bases, function(x){
-                paste0(dummy.base.end[x:(self$kmer+x-1)], collapse = "")
-            }, USE.NAMES = FALSE)
-            dummy.bases <- c(dummy.base.start, dummy.base.end)
-
-            # assign avg prob to dummy k-mers
-            prob <- c(
-                self$df_prob[, -c("kmer")],
-                rep(colMeans(
-                    self$df_prob[, -c("kmer")], 
-                    na.rm = TRUE
-                ),length(dummy.bases))
-            )
-            prob <- unlist(prob, use.names = FALSE)
-            prob.norm <- prob/sum(prob, na.rm = TRUE)
-
-            dummy.bases.df <- data.table(
-                kmer = dummy.bases,
-                action = tail(
-                    prob, 
-                    n = length(dummy.bases)
-                )
-            )
-            setnames(dummy.bases.df, private$cols_to_keep)
-            self$df_prob <- rbind(self$df_prob, dummy.bases.df)
-            self$df_prob[, prob.norm := prob.norm]
-            to.keep <- c("kmer", "prob.norm")
-            self$df_prob <- self$df_prob[, ..to.keep]
-            setnames(self$df_prob, c("kmer", "prob"))
-
-            # for cpp code
-            rev.comp = as.character(
-                Biostrings::reverseComplement(
-                    Biostrings::DNAStringSet(self$df_prob$kmer)
-                )
-            )
-            self$df_prob[, rev_comp := rev.comp]
-
-            k.mers <- do.call(
-                data.table::CJ, 
-                rep(list(c("A", "C", "G", "T")), 
-                self$kmer)
-            )
-            kmer_list <- k.mers[, do.call(paste0, .SD)]
-            self$kmer_ref <- data.table(kmer=kmer_list)
-            self$kmer_ref[, prob := 0]
-            setnames(dummy.bases.df, c("kmer", "prob"))
-            self$kmer_ref <- rbindlist(list(self$kmer_ref, dummy.bases.df))
-            self$kmer_ref[, prob := 0]
-
-            # forward kmers
-            ind_fwd <- match(self$df_prob$kmer, self$kmer_ref$kmer)
-            self$kmer_ref$prob[ind_fwd] <- self$df_prob$prob
-
-            # reverse complement kmers
-            ind_rc <- match(self$df_prob$rev_comp, self$kmer_ref$kmer)
-            ind_rc[is.na(ind_rc)] <- (nrow(self$kmer_ref)-nrow(dummy.bases.df)+1):nrow(self$kmer_ref)
-            self$kmer_ref$prob[ind_rc] <- self$df_prob$prob
-            self$df_prob[, rev_comp := NULL]
-
             # obtain all k-mers of the randomly generated string
             end <- length(self$genome_seq)-self$kmer+1
             genome_seq_kmers <- substring(
@@ -315,75 +244,60 @@ GenerateReads <- R6::R6Class(
                 first = 1:end, 
                 last = (1:end)+self$kmer-1
             )
-
+            
             # initialise data frame with all k-mers from ref.seq 
             # and associated probs
             kmer.from.seq <- data.table(
                 kmer = genome_seq_kmers,
                 prob = NA
             )
-
+            
             # replace NAs with probability values from reference data frame
-            fwd.ind <- match(kmer.from.seq$kmer, self$df_prob$kmer)
+            fwd.ind <- match(kmer.from.seq$kmer, self$df_prob[[paste0("kmer_", self$kmer)]]$kmer)
+            self$kmer_from_seq <- kmer.from.seq$prob <- self$df_prob[[paste0("kmer_", self$kmer)]]$prob[fwd.ind]
 
-            # reverse complement kmer index
-            rev.comp.kmer.ind <- which(is.na(fwd.ind))
-            rev.comp.prob.ind <- match(
-                paste(Biostrings::reverseComplement(
-                    Biostrings::DNAStringSet(
-                        kmer.from.seq$kmer[rev.comp.kmer.ind]
-                    )
-                )),
-                self$df_prob$kmer
-            )
-            kmer.from.seq$prob[rev.comp.kmer.ind] <- 
-                self$df_prob$prob[rev.comp.prob.ind]
-
-            # fwd kmer index
-            fwd.prob.ind <- fwd.ind[which(!is.na(fwd.ind))]
-            fwd.kmer.ind <- which(!is.na(fwd.ind))
-            kmer.from.seq$prob[fwd.kmer.ind] <- self$df_prob$prob[fwd.prob.ind]
-            self$kmer_from_seq <- kmer.from.seq$prob
-
-            # plot breakage probability over the full genome sequence
-            mytitle <- "Kmeric breakage probabilities of genome sequence"
-            mysubtitle <- paste0(
-                "Kmer: ", self$kmer, ". ",
-                "Sequence length: ", length(self$genome_seq), ". ",
-                "Sequence set.seed: ", private$seed
-            )
-            dir.create(
-                path = paste0("../figures/exp_", private$ind, "/"),
-                showWarnings = FALSE,
-                recursive = TRUE
-            )
-            pdf(
-                file = paste0(
-                    "../figures/exp_", private$ind,
-                    "/BreakProb-vs-GenomeSeq", 
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,                    
-                    "_kmer-", self$kmer, 
-                    ".pdf"
-                ),
-                width = 11, 
-                height = 8
-            )
-            barplot(
-                kmer.from.seq$prob,
-                main = "",
-                xlab = paste0("Genome sequence (", 
-                              self$kmer, "-mer sliding window ", 
-                              "by 1 nt)"),
-                ylab = "Breakage probabilitiy",
-                col = "grey"
-            )
-            mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
-            mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
-            plot.saved <- dev.off()
+            if(private$plot_results){
+                # plot breakage probability over the full genome sequence
+                mytitle <- "Kmeric breakage probabilities of genome sequence"
+                mysubtitle <- paste0(
+                    "Kmer: ", self$kmer, ". ",
+                    "Sequence length: ", format(private$seq_len, scientific = FALSE), ". ",
+                    "Sequence set.seed: ", private$seed
+                )
+                dir.create(
+                    path = paste0("../figures/exp_", private$ind, "/"),
+                    showWarnings = FALSE,
+                    recursive = TRUE
+                )
+                pdf(
+                    file = paste0(
+                        "../figures/exp_", private$ind,
+                        "/BreakProb-vs-GenomeSeq", 
+                        "_SeqLen-", format(private$seq_len, scientific = FALSE),
+                        "_SeqSeed-", private$seed,                    
+                        "_kmer-", self$kmer, 
+                        "_IndustryModel-", private$industry_standard,
+                        ".pdf"
+                    ),
+                    width = 11, 
+                    height = 8
+                )
+                barplot(
+                    kmer.from.seq$prob,
+                    main = "",
+                    xlab = paste0("Genome sequence (", 
+                                self$kmer, "-mer sliding window ", 
+                                "by 1 nt)"),
+                    ylab = "Breakage probabilitiy",
+                    col = "grey"
+                )
+                mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
+                mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
+                plot.saved <- dev.off()
+            }
 
             # sample multiple breakpoint positions
-            len.sampling <- private$seq_len*10
+            len.sampling <- ceiling(private$coverage_target*length(self$genome_seq)/private$read_len)
             bp.start.pos <- sample(
                 x = nrow(kmer.from.seq),
                 size = len.sampling, 
@@ -397,42 +311,64 @@ GenerateReads <- R6::R6Class(
             bp.start.pos <- bp.start.pos[ind.to.keep]
 
             # plot breakage probability over the full genome sequence
-            mytitle <- paste0(
-                "Probability-weighted sampling of genomic sequence ", 
-                "positions to replicate ultrasonication process"
-            )
-            pdf(
-                file = paste0(
-                    "../figures/exp_", private$ind,
-                    "/UltrasonicatedGenome", 
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,                    
-                    "_kmer-", self$kmer, 
-                    ".pdf"
-                ),
-                width = 11, 
-                height = 8
-            )
-            hist(
-                bp.start.pos, 
-                breaks = 300,
-                main = "",
-                xlab = "Genomic sequence position",
-                xlim = c(0, private$seq_len)
-            )
-            mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
-            mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
-            plot.saved <- dev.off()
+            if(private$plot_results){
+                mytitle <- paste0(
+                    "Probability-weighted sampling of genomic sequence ", 
+                    "positions to replicate ultrasonication process"
+                )
+                pdf(
+                    file = paste0(
+                        "../figures/exp_", private$ind,
+                        "/UltrasonicatedGenome", 
+                        "_SeqLen-", format(private$seq_len, scientific = FALSE),
+                        "_SeqSeed-", private$seed,
+                        "_kmer-", self$kmer, 
+                        "_IndustryModel-", private$industry_standard,
+                        ".pdf"
+                    ),
+                    width = 11, 
+                    height = 8
+                )
+                hist(
+                    bp.start.pos, 
+                    breaks = 300,
+                    main = "",
+                    xlab = "Genomic sequence position",
+                    xlim = c(0, private$seq_len),
+                    density = FALSE
+                )
+                mtext(line=2.2, at=-0.07, adj=0, cex=1.1, mytitle)
+                mtext(line=1, at=-0.07, adj=0, cex=0.9, mysubtitle)
+                plot.saved <- dev.off()
+            }
 
-            # synthetic sequencing by synthesis for paired-end sequencing
-            # read two information will be used for the breakage scoring and 
-            # overall evaluation of the de novo assembly results
+            # #' Simulate ultrasonication of genome to generate fragments of varying sizes
+            # broken_fragments <- matrix(c(
+            #     bp.start.pos[seq(from = 1, to = length(bp.start.pos)-1, 2)],
+            #     bp.start.pos[seq(from = 2, to = length(bp.start.pos), 2)]
+            # ), ncol = 2)
+            # broken_fragments <- t(apply(broken_fragments, 1, sort))
+            # colnames(broken_fragments) <- c("start", "end")
+
+            # #' Simulate sequencing by synthesis where the user specifies the number of 
+            # #' cycles to add nucleotides for synthesis. Read two is the reverse complement of 
+            # #' the 3' of the broken fragment.
+            # read.one <- IRanges(
+            #     start = broken_fragments[,"start"], 
+            #     width = private$read_len
+            # )
+            # read.two <- IRanges(
+            #     start = broken_fragments[,"end"] - private$read_len, 
+            #     width = private$read_len
+            # )
+            
+            #' Old version:
             read.one <- IRanges(start = bp.start.pos, width = private$read_len)
 
             # extract nucleotide bases
             bio.ref.seq <- Biostrings::DNAStringSet(
                 paste(self$genome_seq, collapse = "")
-            )            
+            )
             # get sequencing read for read one
             self$sequencing_reads$read_one <- read.one <- substring(
                 text = bio.ref.seq,
@@ -446,81 +382,99 @@ GenerateReads <- R6::R6Class(
             )
             self$dbg_summary$nr_of_reads <- length(read.one)
 
-            # # remove dummy bases on each end of the randomly generated sequence
-            # self$genome_seq <- self$genome_seq[
-            #     self$kmer:(length(self$genome_seq)-self$kmer+1)]
-            # self$df_prob <- head(self$df_prob, n = -(2*self$kmer-2))
-
             # save generated reads into text file for use in genome assembly
             dir.create(
                 path = paste0("../data/reads/exp_", private$ind, "/"),
                 showWarnings = FALSE,
                 recursive = TRUE
             )
-            file.reads <- file(paste0(
-                "../data/reads/exp_", private$ind, 
-                "/read_1",
-                "_SeqLen-", private$seq_len, 
-                "_SeqSeed-", private$seed,
-                "_ReadLen-", private$read_len,
-                ".txt"
-            ))
-            writeLines(
-                read.one,
-                file.reads, 
-                sep = "\n"
-            )
-            close(file.reads)
 
             # fasta file for read one
             read.one <- Biostrings::DNAStringSet(read.one)
-            names(read.one) <- paste0("seq-", 1:length(read.one), ":", private$read_len)
-            Biostrings::writeXStringSet(
-                x = read.one, 
-                filepath = paste0(
-                    "../data/reads/exp_", private$ind, 
-                    "/read_1",
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
-                    ".fasta"
-                ),
-                format = "fasta"
+            refgenome.name <- names(private$genome[private$ind])
+            refgenome.chrname <- stringr::str_extract(
+                string = refgenome.name,
+                pattern = "[^_]+"
             )
+            refgenome.start.pos <- stringr::str_extract(
+                string = refgenome.name, pattern = "(?<=_).*"
+            ) %>% as.numeric()
 
+            refgenome.start.pos.read1 <- paste0(
+                refgenome.chrname, "_",
+                # #' After:
+                # refgenome.start.pos+broken_fragments[,"start"], "_", 
+                # refgenome.start.pos+broken_fragments[,"start"]+private$read_len
+                
+                # ' Before:
+                refgenome.start.pos+bp.start.pos, "_", 
+                refgenome.start.pos+bp.start.pos+private$read_len
+            )
+            names(read.one) <- paste0(
+                refgenome.start.pos.read1, ":0_",
+                1:length(read.one), "/1"
+            )
+            if(private$save_read_files){
+                Biostrings::writeXStringSet(
+                    x = read.one, 
+                    filepath = paste0(
+                        "../data/reads/exp_", private$ind, 
+                        "/read_1",
+                        "_SeqLen-", format(private$seq_len, scientific = FALSE),
+                        "_SeqSeed-", private$seed,
+                        "_ReadLen-", private$read_len,
+                        "_DBGKmer-", self$dbg_kmer,
+                        ".fasta"
+                    ),
+                    format = "fasta"
+                )
+            }
+
+            #' Before: 
             # fasta file for read one
             read.two <- Biostrings::DNAStringSet(
                 Biostrings::reverseComplement(read.one)
             )
-            names(read.two) <- paste0("seq-", 1:length(read.two), ":", private$read_len)
-            Biostrings::writeXStringSet(
-                x = read.two, 
-                filepath = paste0(
-                    "../data/reads/exp_", private$ind, 
-                    "/read_2",
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
-                    ".fasta"
-                ),
-                format = "fasta"
+            names(read.two) <- paste0(
+                refgenome.start.pos.read1, ":0_",
+                1:length(read.two), "/2"
             )
+            if(private$save_read_files){
+                Biostrings::writeXStringSet(
+                    x = read.two, 
+                    filepath = paste0(
+                        "../data/reads/exp_", private$ind, 
+                        "/read_2",
+                        "_SeqLen-", format(private$seq_len, scientific = FALSE),
+                        "_SeqSeed-", private$seed,
+                        "_ReadLen-", private$read_len,
+                        "_DBGKmer-", self$dbg_kmer,
+                        ".fasta"
+                    ),
+                    format = "fasta"
+                )
+            }
 
+            # reference genome in fasta format
             genome.seq <- self$dbg_summary$genome_seq <- paste(self$genome_seq, collapse = "")
             genome.seq <- Biostrings::DNAStringSet(genome.seq)
             names(genome.seq) <- "seq-1"
-            Biostrings::writeXStringSet(
-                x = genome.seq, 
-                filepath = paste0(
-                    "../data/reads/exp_", private$ind, 
-                    "/ref",
-                    "_SeqLen-", private$seq_len, 
-                    "_SeqSeed-", private$seed,
-                    "_ReadLen-", private$read_len,
-                    ".txt"
-                ),
-                format = "fasta"
-            )
+
+            if(private$save_read_files){
+                Biostrings::writeXStringSet(
+                    x = genome.seq, 
+                    filepath = paste0(
+                        "../data/reads/exp_", private$ind, 
+                        "/ref",
+                        "_SeqLen-", format(private$seq_len, scientific = FALSE),
+                        "_SeqSeed-", private$seed,
+                        "_ReadLen-", private$read_len,
+                        "_DBGKmer-", self$dbg_kmer,
+                        ".fasta"
+                    ),
+                    format = "fasta"
+                )
+            }
 
             total.time <- Sys.time() - t1
             cat("DONE! --", signif(total.time[[1]], 2), 
