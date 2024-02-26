@@ -9,6 +9,12 @@
 *.RDataTmp3
 *.RDataTmp4
 *.RData
+*.csv
+*.fasta
+*.fa
+*.pdf
+*.png
+*.ipynb
 # ignore these directories with all the files within
 temp/
 archive/
