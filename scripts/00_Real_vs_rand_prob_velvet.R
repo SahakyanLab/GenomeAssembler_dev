@@ -7,7 +7,7 @@ suppressPackageStartupMessages(suppressWarnings(library(pbapply)))
 suppressPackageStartupMessages(suppressWarnings(library(Biostrings)))
 suppressPackageStartupMessages(suppressWarnings(library(plyranges)))
 suppressPackageStartupMessages(suppressWarnings(library(BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0)))
-pbapply::pboptions(char = "=")
+pbapply::pboptions(char = "=", type = "txt")
 
 args <- commandArgs(trailingOnly = TRUE)
 my.path <- as.character(args[1])
@@ -45,7 +45,7 @@ for(row in 1:nrow(loop_grid)){
             only_kmers_from_reads = FALSE,
             save_read_files = TRUE,
             industry_standard = industry_standard,
-            plot_results = FALSE,
+            plot_results = FALSE
         )
         assembler$run_assembler(total_iters = total_iters)
     }

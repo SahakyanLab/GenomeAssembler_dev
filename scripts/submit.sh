@@ -11,5 +11,6 @@ Rscript 01_Real_vs_rand_prob_break_vs_kmers.R $pwd
 # no dependency on GC content
 Rscript 03_GC_content_dependency.R $pwd
 
-# uncomment the below line to optinally run a simple self-implementation of de novo assemblers
+# Uncomment the below line to optinally run a simple self-implementation of de novo assemblers
+# However, please note that the implementation is not efficient and will be very slow.
 # Rscript 02_Real_vs_rand_prob_own.R $pwd 

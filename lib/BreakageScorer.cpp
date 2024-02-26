@@ -7,9 +7,6 @@
 // fast hash map
 #include <gtl/include/gtl/phmap.hpp>
 
-// parallel for loop
-#include </usr/local/Cellar/libomp/16.0.2/include/omp.h>
-
 // edlib dependency
 #include "../lib/edlib/edlib.h"
 

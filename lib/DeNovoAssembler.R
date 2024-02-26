@@ -66,7 +66,7 @@ DeNovoAssembler <- R6::R6Class(
                     if(private$plot_results) private$quick_plots(bins = bins)
                 }
                 self$results <- private$score_solutions()
-                private$save_results()
+                # private$save_results()
             } else {
                 private$count_read_kmers()
             }
@@ -180,7 +180,7 @@ DeNovoAssembler <- R6::R6Class(
             # run velvet algorithm
             # velvet h
             velveth.command <- paste0(
-                "../tests/velvet/velveth ",
+                "../lib/velvet/velveth ",
                 
                 "../data/reads/exp_", private$ind, " ", 
                 
@@ -208,7 +208,7 @@ DeNovoAssembler <- R6::R6Class(
 
             # velvet g
             velvetg.command <- paste0(
-                "../tests/velvet/velvetg ",
+                "../lib/velvet/velvetg ",
                 
                 "../data/reads/exp_", private$ind, " ",
                 
