@@ -9,7 +9,7 @@ Clone the project:
 git clone https://github.com/SahakyanLab/GenomeAssembler_dev.git
 ```
 
-Please follow the instructions below on how to acquire the public datasets, setup the directory stucture, and software necessary to run all the studies from the publication.  At the end of this `README` file, you can find two separate bash script commands that runs the majority of the setup and runs the calculations sequentially. 
+Please follow the instructions below on how to acquire the public datasets, setup the directory stucture, and software necessary to run all the studies from the publication.  At the end of this `README` file, you can find two separate bash script commands that runs the majority of the setup and runs the calculations sequentially.
 
 ## Software requirements
 The resource-demanding computations were performed on a single NVIDIA RTX A6000 GPU with 40GB RAM. The developed workflows and analyses employed the [R programming language 4.3.2](https://www.r-project.org/).
