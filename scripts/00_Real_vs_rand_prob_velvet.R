@@ -58,6 +58,7 @@ for(row in 1:nrow(loop_grid)){
 res <- pbapply::pblapply(1:nrow(loop_grid), function(x){
     files <- list.files(
         path = "../data/results",
+        # path = "../archive/velvet",
         pattern = paste0(
             "SolutionsTable_SeqLen-", format(seq_len, scientific = FALSE), 
             "_SeqSeed-", seed, 
@@ -174,6 +175,7 @@ ggsave(
 all_res <- pbapply::pblapply(1:nrow(loop_grid), function(x){
     files <- list.files(
         path = "../data/results",
+        # path = "../archive/velvet",
         pattern = paste0(
             "SolutionsTable_SeqLen-", format(seq_len, scientific = FALSE), 
             "_SeqSeed-", seed, 
@@ -338,13 +340,103 @@ sol_to_bin <- as_tibble(df_all_res) %>%
         read_len = factor(read_len, levels = unique_read_len)
     )
 
-nr_bins <- 6
+nr_bins <- 3
 p8 <- sol_to_bin %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true) &
+        lev_dist_vs_true <= 5
+    ) %>%
     dplyr::mutate(bins = cut(
-        stat_test_KS_true, 
+        lev_dist_vs_true, 
+        breaks = seq(
+            from = 0,
+            to = max(lev_dist_vs_true), 
+            length.out = nr_bins + 1
+        ), 
+        include.lowest = TRUE
+    )) %>% 
+    dplyr::ungroup() %>% 
+    ggplot(aes(x = bins, y = stat_test_KS_true, fill = read_len)) + 
+    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
+    theme_bw() + 
+    theme_classic() + 
+    theme(
+        text = element_text(size = 15),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"
+    ) + 
+    scale_fill_brewer(palette = "Set3") + 
+    # coord_cartesian(ylim = c(0, 0.1)) + 
+    facet_wrap(vars(read_len), nrow = 1) + 
+    labs(
+        x = "Levenshtein distance",
+        y = "KS statistic"
+    )
+    
+ggsave(
+    filename = paste0(
+        "../figures/", base_dir, "/",
+        "Binned-Levenshtein-distance_vs_Breakscore",
+        "_IndustryModel-", industry_standard, 
+        ".pdf"
+    ),
+    plot = p8,
+    height = 5, width = 16
+)
+
+p9 <- sol_to_bin %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true) &
+        lev_dist_vs_true <= 5
+    ) %>%
+    dplyr::mutate(bins = cut(
+        lev_dist_vs_true, 
         breaks = seq(
             from = 0, 
-            to = max(stat_test_KS_true), 
+            to = max(lev_dist_vs_true), 
+            length.out = nr_bins + 1
+        ), 
+        include.lowest = TRUE
+    )) %>% 
+    dplyr::ungroup() %>% 
+    ggplot(aes(x = bins, y = bp_score_norm_by_break_freqs_true, fill = read_len)) + 
+    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
+    theme_bw() + 
+    theme_classic() + 
+    theme(
+        text = element_text(size = 15),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"
+    ) + 
+    scale_fill_brewer(palette = "Set3") + 
+    scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
+    facet_wrap(vars(read_len), nrow = 1) + 
+    labs(
+        x = "Levenshtein distance",
+        y = expression("Breakage score norm. by break freq., x10"^-5*"")
+    )
+    
+ggsave(
+    filename = paste0(
+        "../figures/", base_dir, "/",
+        "Binned-Levenshtein-distance_vs_NormBreakscore",
+        "_IndustryModel-", industry_standard, 
+        ".pdf"
+    ),
+    plot = p9,
+    height = 5, width = 16
+)
+
+p10 <- sol_to_bin %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true) &
+        lev_dist_vs_true <= 5
+    ) %>%
+    dplyr::mutate(bins = cut(
+        lev_dist_vs_true, 
+        breaks = seq(
+            from = 0, 
+            to = max(lev_dist_vs_true), 
             length.out = nr_bins + 1
         ), 
         include.lowest = TRUE
@@ -360,64 +452,25 @@ p8 <- sol_to_bin %>%
         legend.position = "none"
     ) + 
     scale_fill_brewer(palette = "Set3") + 
-    coord_cartesian(ylim = c(0, 0.1)) + 
+    scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
     facet_wrap(vars(read_len), nrow = 1) + 
     labs(
-        x = "KS statistic",
+        x = "Levenshtein distance",
         y = "Breakage score"
     )
     
 ggsave(
     filename = paste0(
         "../figures/", base_dir, "/",
-        "Binned-KS-statistic_vs_Breakscore",
+        "Binned-Levenshtein-distance_vs_Breakscore",
         "_IndustryModel-", industry_standard, 
         ".pdf"
     ),
-    plot = p8,
+    plot = p10,
     height = 5, width = 16
 )
 
-p9 <- sol_to_bin %>% 
-    dplyr::mutate(bins = cut(
-        stat_test_KS_true, 
-        breaks = seq(
-            from = 0, 
-            to = max(stat_test_KS_true), 
-            length.out = nr_bins + 1
-        ), 
-        include.lowest = TRUE
-    )) %>% 
-    dplyr::ungroup() %>% 
-    ggplot(aes(x = bins, y = bp_score_norm_by_break_freqs_true, fill = read_len)) + 
-    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
-    theme_bw() + 
-    theme_classic() + 
-    theme(
-        text = element_text(size = 15),
-        axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "none"
-    ) + 
-    scale_fill_brewer(palette = "Set3") + 
-    scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
-    facet_wrap(vars(read_len), nrow = 1) + 
-    labs(
-        x = "KS statistic",
-        y = expression("Breakage score norm. by break freq., x10"^-5*"")
-    )
-    
-ggsave(
-    filename = paste0(
-        "../figures/", base_dir, "/",
-        "Binned-KS-statistic_vs_NormBreakscore",
-        "_IndustryModel-", industry_standard, 
-        ".pdf"
-    ),
-    plot = p9,
-    height = 5, width = 16
-)
-
-p10 <- as_tibble(df_all_res) %>% 
+p11 <- as_tibble(df_all_res) %>% 
     dplyr::select(
         stat_test_KS_true, lev_dist_vs_true, 
         bp_score_norm_by_len_true, 
@@ -427,18 +480,24 @@ p10 <- as_tibble(df_all_res) %>%
     ) %>% 
     dplyr::filter(
         !is.na(stat_test_KS_true) &
+        lev_dist_vs_true <= 5 &
         read_len >= 16
     ) %>%
     dplyr::mutate(
         read_len = paste0("Read len: ", read_len),
         read_len = factor(read_len, levels = unique_read_len),
         bins = cut(
-            stat_test_KS_true, 
-            breaks = seq(from = 0, to = 1, length.out = nr_bins + 1), 
+            lev_dist_vs_true, 
+            breaks = seq(
+                from = 0,
+                to = max(lev_dist_vs_true), 
+                length.out = nr_bins + 1
+            ), 
             include.lowest = TRUE
-    )) %>% 
+        )
+    ) %>% 
     dplyr::ungroup() %>% 
-    ggplot(aes(x = bins, y = bp_score_norm_by_break_freqs_true, fill = read_len)) + 
+    ggplot(aes(x = bins, y = stat_test_KS_true, fill = read_len)) + 
     geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
     theme_bw() + 
     theme_classic() + 
@@ -448,11 +507,11 @@ p10 <- as_tibble(df_all_res) %>%
         legend.position = "none"
     ) + 
     scale_fill_brewer(palette = "Set3") + 
-    scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
+    # coord_cartesian(ylim = c(0, 0.1)) + 
     facet_wrap(vars(read_len), nrow = 1) + 
     labs(
-        x = "KS statistic",
-        y = expression("Breakage score norm. by break freq., x10"^-5*"")
+        x = "Levenshtein distance",
+        y = "KS statistic"
     )
     
 ggsave(
@@ -461,6 +520,6 @@ ggsave(
         "For_Paper_IndustryModel-", industry_standard, 
         ".pdf"
     ),
-    plot = p10,
+    plot = p11,
     height = 7, width = 12
 )

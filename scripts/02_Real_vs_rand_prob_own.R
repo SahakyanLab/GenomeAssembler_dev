@@ -82,11 +82,9 @@ res <- pbapply::pblapply(1:nrow(loop_grid), function(x){
             ),
             showProgress = FALSE
         )
-        return(dt)
-        # return(colMeans(dt, na.rm = TRUE))
+        return(colMeans(dt, na.rm = TRUE))
     })
-    # df <- do.call(rbind, df)
-    df <- rbindlist(df)
+    df <- do.call(rbind, df)
     df <- as.data.table(df)
     df[, `:=`(
         read_len = loop_grid$read_lens[x],
@@ -118,36 +116,42 @@ base_dir <- paste0("IndustryModel_", industry_standard)
 dir.create(paste0("../data/", base_dir), showWarnings = FALSE, recursive = TRUE)
 dir.create(paste0("../figures/", base_dir), showWarnings = FALSE, recursive = TRUE)
 
+fwrite(df, paste0("../data/", base_dir, "/results_summary.csv"))
+
 ##################################################################################
 #' To demonstrate:
 #' 1. Show that my solutions are better than random probabilities.
 ##################################################################################
+unique_read_len <- unique(df$read_len)
+unique_read_len <- paste0("Read len: ", sort(unique_read_len, decreasing = TRUE))
+
 p3 <- df %>% 
     dplyr::filter(!is.na(Value)) %>% 
-    dplyr::filter(Key == "stat_test_KL") %>% 
+    dplyr::filter(Key == "stat_test_KS") %>% 
     dplyr::mutate(
-        x_label = ifelse(random_prob, "Random", "Non-random"),
-        `Break. prob.` = as.factor(x_label),
-        read_len = paste0("Read len: ", read_len)
+        solution = ifelse(random_prob, "Random", "Non-random"),
+        solution = as.factor(solution),
+        read_len = paste0("Read len: ", read_len),
+        read_len = factor(read_len, levels = unique_read_len)
     ) %>% 
-    ggplot(aes(x = `Break. prob.`, y = Value, fill = `Break. prob.`)) + 
+    ggplot(aes(x = solution, y = Value, fill = solution)) + 
     geom_boxplot(alpha = 0.75) + 
     ggsignif::geom_signif(
         comparisons = list(c("Non-random", "Random")),
         map_signif_level = TRUE,
         test = "t.test",
         textsize = 5,
-        vjust = -0.1,
-        margin_top = -0.05
+        y_position = 0.92,
+        tip_length = 0
     ) +
     scale_fill_manual(values = c("#2166ac", "#b2182b")) +  
     facet_wrap(vars(read_len), nrow = 1) + 
-    # coord_cartesian(ylim = c(NA, 0.004)) + 
+    coord_cartesian(ylim = c(0, 1)) + 
     theme_bw() + 
     theme_classic() + 
     theme(text = element_text(size = 15)) + 
     labs(
-        title = "KS statistic between solutions and reference genome",
+        # title = "KS statistic between solutions and reference genome",
         x = "", 
         y = "KS statistic"
     )
@@ -155,7 +159,7 @@ p3 <- df %>%
 ggsave(
     filename = paste0(
         "../figures/", base_dir, "/",
-        "KS_contigs_reference",
+        "KS-statistic_contigs_reference",
         "_IndustryModel-", industry_standard, 
         ".pdf"
     ),
@@ -207,6 +211,7 @@ all_res <- pbapply::pblapply(1:nrow(loop_grid), function(x){
     return(df)
 })
 df_all_res <- rbindlist(all_res)
+fwrite(df_all_res, paste0("../data/", base_dir, "/results_all.csv"))
 
 #' Show that the top 5% of solutions are better by breakage score
 #' compared to all solutions.
@@ -228,7 +233,8 @@ c_sol <- dplyr::bind_rows(top_sol, all_sol)
 p4 <- c_sol %>% 
     dplyr::mutate(
         solution = factor(solution, levels = c("Top 5%", "Remaining")),
-        read_len = paste0("Read len: ", read_len)
+        read_len = paste0("Read len: ", read_len),
+        read_len = factor(read_len, levels = unique_read_len)
     ) %>% 
     ggplot(aes(x = solution, y = bp_score, fill = solution)) + 
     geom_boxplot(alpha = 0.75) + 
@@ -237,12 +243,13 @@ p4 <- c_sol %>%
         map_signif_level = TRUE,
         test = "t.test",
         textsize = 5,
-        vjust = -0.1,
-        margin_top = 0.15
+        vjust = -0.25,
+        tip_length = 0
+        # margin_top = -0.04
     ) +
     scale_fill_manual(values = c("#2166ac", "#b2182b")) +  
+    coord_cartesian(ylim = c(0, max(c_sol$bp_score, na.rm = TRUE)*1.1)) + 
     facet_wrap(vars(read_len), nrow = 1) + 
-    coord_cartesian(ylim = c(0, 0.08)) + 
     theme_bw() + 
     theme_classic() + 
     theme(text = element_text(size = 15)) + 
@@ -282,7 +289,8 @@ c_sol <- dplyr::bind_rows(top_sol, all_sol)
 p5 <- c_sol %>% 
     dplyr::mutate(
         solution = factor(solution, levels = c("Top 5%", "Remaining")),
-        read_len = paste0("Read len: ", read_len)
+        read_len = paste0("Read len: ", read_len),
+        read_len = factor(read_len, levels = unique_read_len)
     ) %>% 
     ggplot(aes(x = solution, y = bp_score_norm, fill = solution)) + 
     geom_boxplot(alpha = 0.75) + 
@@ -291,13 +299,14 @@ p5 <- c_sol %>%
         map_signif_level = TRUE,
         test = "t.test",
         textsize = 5,
-        vjust = 0.2,
-        margin_top = 0.1
+        vjust = 0.35,
+        margin_top = 0.06,
+        tip_length = 0
     ) +
     scale_fill_manual(values = c("#2166ac", "#b2182b")) +  
     scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
     facet_wrap(vars(read_len), nrow = 1) + 
-    coord_cartesian(ylim = c(0, 2.3e-5)) + 
+    # coord_cartesian(ylim = c(0, 2.5e-5)) +
     theme_bw() + 
     theme_classic() + 
     theme(text = element_text(size = 15)) + 
@@ -327,23 +336,29 @@ sol_to_bin <- as_tibble(df_all_res) %>%
         read_len
     ) %>% 
     dplyr::filter(!is.na(stat_test_KS_true)) %>% 
-    dplyr::mutate(read_len = paste0("Read len: ", read_len)) %>% 
-    dplyr::group_by(read_len)
+    dplyr::mutate(
+        read_len = paste0("Read len: ", read_len),
+        read_len = factor(read_len, levels = unique_read_len)
+    )
 
-nr_bins <- 4
+nr_bins <- 8
 p8 <- sol_to_bin %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true)
+        # lev_dist_vs_true <= 5
+    ) %>%
     dplyr::mutate(bins = cut(
-        stat_test_KS_true, 
+        lev_dist_vs_true, 
         breaks = seq(
-            from = 0, 
-            to = max(stat_test_KS_true), 
+            from = 0,
+            to = max(lev_dist_vs_true), 
             length.out = nr_bins + 1
         ), 
         include.lowest = TRUE
     )) %>% 
     dplyr::ungroup() %>% 
-    ggplot(aes(x = bins, y = bp_score_true, fill = read_len)) + 
-    geom_boxplot(alpha = 0.75) + 
+    ggplot(aes(x = bins, y = stat_test_KS_true, fill = read_len)) + 
+    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
     theme_bw() + 
     theme_classic() + 
     theme(
@@ -352,24 +367,30 @@ p8 <- sol_to_bin %>%
         legend.position = "none"
     ) + 
     scale_fill_brewer(palette = "Set3") + 
-    facet_wrap(vars(read_len), nrow = 1, scales = "free_x") + 
+    # coord_cartesian(ylim = c(0, 0.1)) + 
+    facet_wrap(vars(read_len), nrow = 1) + 
     labs(
-        x = "KS statistic",
-        y = "Breakage score"
+        x = "Levenshtein distance",
+        y = "KS statistic"
     )
-
+    
 ggsave(
     filename = paste0(
         "../figures/", base_dir, "/",
-        "Binned-KS_vs_Breakscore",
+        "Binned-Levenshtein-distance_vs_KS-statistic",
         "_IndustryModel-", industry_standard, 
-        ".pdf"
+        ".png"
     ),
     plot = p8,
     height = 5, width = 16
 )
 
+nr_bins <- 4
 p9 <- sol_to_bin %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true) &
+        lev_dist_vs_true <= 100
+    ) %>%
     dplyr::mutate(bins = cut(
         lev_dist_vs_true, 
         breaks = seq(
@@ -380,8 +401,8 @@ p9 <- sol_to_bin %>%
         include.lowest = TRUE
     )) %>% 
     dplyr::ungroup() %>% 
-    ggplot(aes(x = bins, y = bp_score_true, fill = read_len)) + 
-    geom_boxplot(alpha = 0.75) + 
+    ggplot(aes(x = bins, y = bp_score_norm_by_break_freqs_true, fill = read_len)) + 
+    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
     theme_bw() + 
     theme_classic() + 
     theme(
@@ -390,19 +411,74 @@ p9 <- sol_to_bin %>%
         legend.position = "none"
     ) + 
     scale_fill_brewer(palette = "Set3") + 
-    facet_wrap(vars(read_len), nrow = 1, scales = "free_x") + 
+    scale_y_continuous(labels = scales::label_number(scale = 1e5)) +
+    facet_wrap(vars(read_len), nrow = 1) + 
     labs(
         x = "Levenshtein distance",
-        y = "Breakage score"
+        y = expression("Breakage score norm. by break freq., x10"^-5*"")
     )
-
+    
 ggsave(
     filename = paste0(
         "../figures/", base_dir, "/",
-        "Binned-Levenshtein_vs_Breakscore",
+        "Binned-Levenshtein-distance_vs_NormBreakscore",
         "_IndustryModel-", industry_standard, 
-        ".pdf"
+        ".png"
     ),
     plot = p9,
     height = 5, width = 16
+)
+
+nr_bins <- 8
+p10 <- as_tibble(df_all_res) %>% 
+    dplyr::select(
+        stat_test_KS_true, lev_dist_vs_true, 
+        bp_score_norm_by_len_true, 
+        bp_score_true,
+        bp_score_norm_by_break_freqs_true,
+        read_len
+    ) %>% 
+    dplyr::filter(
+        !is.na(stat_test_KS_true) &
+        read_len >= 16
+    ) %>%
+    dplyr::mutate(
+        read_len = paste0("Read len: ", read_len),
+        read_len = factor(read_len, levels = unique_read_len),
+        bins = cut(
+            lev_dist_vs_true, 
+            breaks = seq(
+                from = 0,
+                to = max(lev_dist_vs_true), 
+                length.out = nr_bins + 1
+            ), 
+            include.lowest = TRUE
+        )
+    ) %>% 
+    dplyr::ungroup() %>% 
+    ggplot(aes(x = bins, y = stat_test_KS_true, fill = read_len)) + 
+    geom_boxplot(alpha = 0.75, outlier.alpha = 0.1) + 
+    theme_bw() + 
+    theme_classic() + 
+    theme(
+        text = element_text(size = 15),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none"
+    ) + 
+    scale_fill_brewer(palette = "Set3") + 
+    # coord_cartesian(ylim = c(0, 0.1)) + 
+    facet_wrap(vars(read_len), nrow = 1) + 
+    labs(
+        x = "Levenshtein distance",
+        y = "KS statistic"
+    )
+    
+ggsave(
+    filename = paste0(
+        "../figures/", base_dir, "/",
+        "For_Paper_IndustryModel-", industry_standard, 
+        ".png"
+    ),
+    plot = p10,
+    height = 7, width = 12
 )
