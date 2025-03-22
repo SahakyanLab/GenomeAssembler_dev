@@ -294,7 +294,8 @@ std::vector<std::string> assemble_contigs(
     });
 
     // Retain top 30% of assembled solution by length
-    int top_30_percent = flat_contig_matrix.size()*1;
+    // int top_30_percent = std::ceil(flat_contig_matrix.size() * 0.3);
+    int top_30_percent = flat_contig_matrix.size() * 1;
     std::vector<std::string> top_30_percent_matrix(
         flat_contig_matrix.begin(),
         flat_contig_matrix.begin()+top_30_percent
@@ -326,23 +327,8 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         bp_matrix[bp_kmer[i]] = std::make_pair(bp_prob[i], 0);
     }
 
-    // hash map of a de novo sequence solution and vector of probabilites
-    gtl::flat_hash_map<std::string, std::vector<double>> path_prob_dist;
-    for(int i = 0; i < path.size(); i++){
-        std::string current_path = path[i];
-
-        // init vector of prob for current path
-        std::vector<double> prob_dist(current_path.length()-kmer+1);
-
-        // get probability values in rolling window
-        for(int pos = 0; pos <= current_path.length()-kmer; pos++){
-            std::string current_kmer = current_path.substr(pos, kmer);
-            prob_dist[pos] = bp_matrix[current_kmer].first;
-        }
-
-        // push into hash map
-        path_prob_dist[path[i]] = prob_dist;
-    }
+    // hash map of a de novo sequence solution and vector of observed k-mer frequencies
+    gtl::flat_hash_map<std::string, std::vector<double>> path_freq;
 
     // hash map of reads and number of counts
     gtl::flat_hash_map<std::string, int> read_matrix;
@@ -360,6 +346,10 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     for(int i = 0; i < path.size(); i++){
         // init total count of kmer breaks
         int total_breaks = 0;
+        std::string current_path = path[i];
+
+        // init vector of k-mer frequencies for current path
+        std::vector<double> observed_breaks(bp_matrix.size());
 
         for(const auto &kv : read_matrix){
             // extract key-value pair
@@ -402,9 +392,14 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         }
 
         // Loop over the bp_matrix
+        size_t observed_ind = 0;
         for(auto &kv : bp_matrix){
+            // extract probability value and break count
             double prob = kv.second.first;
-            int break_count = kv.second.second;
+            double break_count = kv.second.second;
+            
+            // update observation table with k-mer frequency
+            observed_breaks[observed_ind] = break_count / (double)total_breaks;
 
             // Multiply non-zero break_scores with the probability values,
             // add the result to the break_score_vector
@@ -420,6 +415,8 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
                 // reset kmer break counter
                 kv.second.second = 0;
             }
+
+            observed_ind++;
         }
         nr_of_breaks_vector[i] = total_breaks;
         path_len[i] = (int)path[i].length();
@@ -427,6 +424,9 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         // normalised break score by sequence length
         double norm_by_len = (double)break_score_vector[i]/path_len[i];
         break_score_norm_by_len_vector[i] = norm_by_len;
+
+        // push k-mer sequence and break counts into hash map
+        path_freq[path[i]] = observed_breaks;
     }
     
     // sort the break_score_vector in descending order
@@ -448,7 +448,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
     std::vector<int> sorted_path_len(idx.size());
     std::vector<int> sorted_nr_of_breaks_vector(idx.size());
     std::vector<int> lev_dist_vs_true(idx.size());
-    std::vector<std::vector<double>> sorted_path_prob_dist(idx.size());
+    std::vector<std::vector<double>> sorted_path_freq(idx.size());
 
     for(int i = 0; i < idx.size(); i++){
         sorted_break_score[i] = break_score_vector[idx[i]];
@@ -457,7 +457,7 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         sorted_path[i] = path[idx[i]];
         sorted_path_len[i] = path_len[idx[i]];
         sorted_nr_of_breaks_vector[i] = nr_of_breaks_vector[idx[i]];
-        sorted_path_prob_dist[i] = path_prob_dist[sorted_path[i]];
+        sorted_path_freq[i] = path_freq[sorted_path[i]];
 
         // calculate levenshtein distance of assembled vs true solution
         int lev_dist = calc_levenshtein(path[idx[i]], true_solution);
@@ -472,6 +472,6 @@ Rcpp::List calc_breakscore(const std::vector<std::string> &path,
         Rcpp::Named("bp_score_norm_by_len") = sorted_bp_score_norm_by_len,
         Rcpp::Named("kmer_breaks") = sorted_nr_of_breaks_vector,
         Rcpp::Named("lev_dist_vs_true") = lev_dist_vs_true,
-        Rcpp::Named("path_prob_dist") = Rcpp::wrap(sorted_path_prob_dist)
+        Rcpp::Named("path_freq") = Rcpp::wrap(sorted_path_freq)
     );
 }

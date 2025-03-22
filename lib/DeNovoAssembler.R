@@ -66,7 +66,7 @@ DeNovoAssembler <- R6::R6Class(
                     if(private$plot_results) private$quick_plots(bins = bins)
                 }
                 self$results <- private$score_solutions()
-                # private$save_results()
+                private$save_results()
             } else {
                 private$count_read_kmers()
             }
@@ -253,6 +253,8 @@ DeNovoAssembler <- R6::R6Class(
             self$results <- assemble_contigs(
                 contig_matrix = self$contigs,
                 dbg_kmer = self$dbg_kmer
+                # bp_kmer = self$df_prob$all$kmer,
+                # bp_prob = self$df_prob$all$prob
             )
 
             total.time <- Sys.time() - t1
@@ -329,8 +331,20 @@ DeNovoAssembler <- R6::R6Class(
                 } else {
                     bp_prob <<- self$df_prob$all$prob
                 }
+                
+                # get contigs
+                self$contigs <- get_contigs(
+                    read_kmers = self$read_kmers, 
+                    dbg_kmer = self$dbg_kmer,
+                    seed = private$seed
+                )
 
-                # calculate breakage scores
+                # brute-force assemble contigs
+                self$results <- assemble_contigs(
+                    contig_matrix = self$contigs,
+                    dbg_kmer = self$dbg_kmer
+                )
+                
                 breakscore_results <- calc_breakscore(
                     path = self$results, 
                     sequencing_reads = self$sequencing_reads$read_one, 
@@ -344,22 +358,22 @@ DeNovoAssembler <- R6::R6Class(
                 # sort by break score
                 setorder(breakscore_results, -bp_score)
                 if(private$industry_standard){
-                    results <- breakscore_results[breakscore_results$path_prob_dist_startpos != -1]
+                    results <- breakscore_results[breakscore_results$path_freq_startpos != -1]
                 } else {
                     results <- breakscore_results
-                    results[, path_prob_dist_startpos := 0]
+                    results[, path_freq_startpos := 0]
                 }
 
                 if(nrow(results) > 0){
                     # Kulback-Leibler Divergence
                     kl.mat <- sapply(1:nrow(results), function(x){
                         # statistical test of similarity
-                        a_solution <- results$path_prob_dist[[x]]
+                        a_solution <- results$path_freq[[x]]
 
                         # if(private$industry_standard){
                         #     # Tests require both vectors to be of the same length.
                         #     # Thus, truncate the longer one.
-                        #     start.pos <- results$path_prob_dist_startpos[x]+1 # 0-index in cpp
+                        #     start.pos <- results$path_freq_startpos[x]+1 # 0-index in cpp
                         #     true_solution_prob_truncated <- self$kmer_from_seq[start.pos:(
                         #         start.pos+nchar(results$sequence[x])-1
                         #     )]
@@ -393,7 +407,7 @@ DeNovoAssembler <- R6::R6Class(
                         # a_solution_adj <- a_solution_truncated / sum(a_solution_truncated)
                         # true_solution_prob_truncated_adj <- true_solution_prob_truncated / sum(true_solution_prob_truncated)
 
-                        # # Kulback-Leibler Divergence: divergence of P's distribution from Q's
+                        # Kulback-Leibler Divergence: divergence of P's distribution from Q's
                         # PQ <- rbind(a_solution_adj, true_solution_prob_truncated_adj)  
                         # PQ <- philentropy::KL(PQ) %>% suppressMessages()
                         # PQ <- unname(PQ)
@@ -421,9 +435,9 @@ DeNovoAssembler <- R6::R6Class(
                     )
 
                     solutions_coverage <- tibble(
-                        seqnames = "seq_1",
-                        start = results$path_prob_dist_startpos,
-                        end = results$path_prob_dist_startpos + results$sequence_len
+                            seqnames = "seq_1",
+                            start = results$path_freq_startpos,
+                            end = results$path_freq_startpos + results$sequence_len
                         ) %>% 
                         plyranges::as_granges() %>% 
                         reduce(.)
@@ -438,8 +452,8 @@ DeNovoAssembler <- R6::R6Class(
                 # only need to keep the first row because we are summing all contigs anyways
                 results[, `:=`(
                     stat_test_KS = all.ks.stat, 
-                    path_prob_dist = NULL,
-                    path_prob_dist_startpos = NULL,
+                    path_freq = NULL,
+                    path_freq_startpos = NULL,
                     contig_frac_len = covered_region
                 )]
 

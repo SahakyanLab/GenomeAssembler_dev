@@ -166,6 +166,8 @@ GenerateReads <- R6::R6Class(
                 return(dat)
             })
             df_probs <- rbindlist(df_probs)
+            # private$tiny_const <- min(df_probs$prob, na.rm = TRUE)
+            # df_probs[, prob := prob + private$tiny_const]
 
             # normalise probability vector to sum to one
             df_probs[, `:=`(
