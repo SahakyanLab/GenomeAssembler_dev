@@ -545,11 +545,12 @@ png(
 gridExtra::grid.arrange(p10, p9, ncol = 1)
 plot.saved <- dev.off()
 
-# one-way anova test
+# one-way anova test of BPs by each group (read lengths)
 df_prep_anova <- as_tibble(df_all_res) %>% 
     dplyr::select(
         lev_dist_vs_true, 
         bp_score_norm_by_len_true, 
+        bp_score_true,
         read_len
     ) %>% 
     dplyr::mutate(
@@ -567,5 +568,21 @@ df_prep_anova <- as_tibble(df_all_res) %>%
     ) %>% 
     dplyr::ungroup()
 
-anova_test <- aov(lev_dist_vs_true ~ bp_score_norm_by_len_true, data = df_prep_anova)
+anova_test <- aov(lev_dist_vs_true ~ read_len, data = df_prep_anova)
 summary(anova_test)
+
+# spearman test
+spearman_test <- cor.test(
+    x = df_prep_anova$bp_score_true, 
+    y = df_prep_anova$lev_dist_vs_true, 
+    method = "spearman", 
+    alternative = "two.sided", 
+    exact = FALSE
+)
+
+spearman_rank <- cor(
+    x = df_prep_anova$bp_score_true, 
+    y = df_prep_anova$lev_dist_vs_true, 
+    method = "spearman"
+)
+abs_spearman_rank <- abs(spearman_rank)
